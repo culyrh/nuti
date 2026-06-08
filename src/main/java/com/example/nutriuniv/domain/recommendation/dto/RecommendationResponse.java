@@ -25,6 +25,7 @@ public class RecommendationResponse {
         private String name;
         private String imageUrl;
         private BigDecimal nutritionScore;
+        private String grade;       // A~E 등급 (PNS 미계산 상품이면 null)
         private boolean isFavorited;
         private Double score;       // CF일 때만 값 존재, 나머지는 null
         private BrandInfo brand;

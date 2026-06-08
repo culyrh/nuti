@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -73,6 +75,12 @@ public class PnsLookupService {
                 .setParameter("pid", parentCategoryId)
                 .getSingleResult();
         return cnt == null ? 0 : cnt.intValue();
+    }
+
+    /** 상품 목록용 — productId 리스트를 한 번에 조회해서 Map&lt;productId, grade&gt; 반환. */
+    @Transactional(readOnly = true)
+    public Map<Long, String> lookupGrades(List<Long> productIds, int eerBand) {
+        return pnsRepository.findGradesByProductIdsAndEerBand(productIds, eerBand);
     }
 
     public record PnsLookupResult(

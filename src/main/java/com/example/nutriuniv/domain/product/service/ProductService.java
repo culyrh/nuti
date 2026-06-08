@@ -9,7 +9,10 @@ import com.example.nutriuniv.domain.category.repository.CategoryRepository;
 import com.example.nutriuniv.domain.like.repository.UserFavoriteRepository;
 import com.example.nutriuniv.domain.coupang.entity.CoupangLink;
 import com.example.nutriuniv.domain.coupang.repository.CoupangLinkRepository;
+import com.example.nutriuniv.domain.pns.calculator.MealRatioResolver;
 import com.example.nutriuniv.domain.pns.service.PnsLookupService;
+import com.example.nutriuniv.domain.user.entity.UserNutrition;
+import com.example.nutriuniv.domain.user.repository.UserNutritionRepository;
 import com.example.nutriuniv.domain.product.dto.*;
 import com.example.nutriuniv.domain.product.entity.Product;
 import com.example.nutriuniv.domain.product.entity.ProductNutrient;
@@ -30,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -48,6 +52,7 @@ public class ProductService {
     private final EntityManager entityManager;
     private final CoupangLinkRepository coupangLinkRepository;
     private final PnsLookupService pnsLookupService;
+    private final UserNutritionRepository userNutritionRepository;
 
     // ── 일반 유저: 상품 목록 조회 ─────────────────────────────────────────────────
 
@@ -89,8 +94,13 @@ public class ProductService {
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
         Page<Product> page = productRepository.findAll(spec, pageable);
 
+        // 등급 IN 쿼리 (N+1 방지) — 유저 EER 밴드 기준으로 한 번에 조회
+        int eerBand = pnsLookupService.resolveEerBand(userId);
+        List<Long> productIds = page.getContent().stream().map(Product::getId).collect(Collectors.toList());
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+
         List<ProductListResponse> items = page.getContent().stream()
-                .map(p -> toListResponse(p, userId))
+                .map(p -> toListResponse(p, userId, gradeMap.get(p.getId())))
                 .collect(Collectors.toList());
 
         return ProductPageResponse.builder()
@@ -124,7 +134,14 @@ public class ProductService {
         PnsLookupService.PnsLookupResult pnsResult = pnsLookupService.lookup(product.getId(), eerBand);
         ProductDetailResponse.PnsInfo pnsInfo = buildPnsInfo(product, pnsResult, eerBand);
 
-        return toDetailResponse(product, nutrient, userId, coupangLink, pnsInfo);
+        // 영양소 바 차트 기준값 — 로그인 유저는 실제 EER, 비로그인은 eerBand(2000) 사용
+        double eer = resolveEer(userId, eerBand);
+        Long parentCategoryId = product.getCategory().getParent() == null
+                ? null : product.getCategory().getParent().getId();
+        double mealRatio = MealRatioResolver.resolve(parentCategoryId);
+        ProductDetailResponse.NutrientBounds nutrientBounds = buildNutrientBounds(eer, mealRatio);
+
+        return toDetailResponse(product, nutrient, userId, coupangLink, pnsInfo, nutrientBounds);
     }
 
     private ProductDetailResponse.PnsInfo buildPnsInfo(Product product,
@@ -146,6 +163,40 @@ public class ProductService {
                 .parentCategoryName(parentName)
                 .categoryTotal(total)
                 .eerBand(eerBand)
+                .build();
+    }
+
+    /**
+     * 로그인 유저면 user_nutrition에서 실제 EER을 읽고,
+     * 없거나 비로그인이면 eerBand(기본 2000)를 그대로 사용.
+     */
+    private double resolveEer(Long userId, int eerBand) {
+        if (userId == null) return eerBand;
+        return userNutritionRepository.findByUserId(userId)
+                .map(UserNutrition::getEer)
+                .filter(e -> e != null)
+                .map(BigDecimal::doubleValue)
+                .orElse((double) eerBand);
+    }
+
+    /** 명세서 §8 — 영양소별 바 차트 좌/우 기준값 계산. */
+    private ProductDetailResponse.NutrientBounds buildNutrientBounds(double eer, double mealRatio) {
+        return ProductDetailResponse.NutrientBounds.builder()
+                .eerUsed(eer)
+                .mealRatio(mealRatio)
+                .caloriesMax(eer * mealRatio)
+                .carbMin(eer * 0.50 / 4 * mealRatio)
+                .carbMax(eer * 0.65 / 4 * mealRatio)
+                .proteinMin(eer * 0.10 / 4 * mealRatio)
+                .proteinMax(eer * 0.20 / 4 * mealRatio)
+                .fatMin(eer * 0.15 / 9 * mealRatio)
+                .fatMax(eer * 0.30 / 9 * mealRatio)
+                .sugarMax(eer * 0.10 / 4 * mealRatio)
+                .saturatedFatMax(eer * 0.07 / 9 * mealRatio)
+                .transFatMax(eer * 0.01 / 9 * mealRatio)
+                .cholesterolMax(300.0 * mealRatio)
+                .sodiumMax(2300.0 * mealRatio)
+                .fiberTarget(eer * 12.0 / 1000 * mealRatio)
                 .build();
     }
 
@@ -296,7 +347,7 @@ public class ProductService {
 
     // ── 변환 메서드 ───────────────────────────────────────────────────────────────
 
-    private ProductListResponse toListResponse(Product product, Long userId) {
+    private ProductListResponse toListResponse(Product product, Long userId, String grade) {
         boolean favorited = userId != null &&
                 userFavoriteRepository.existsByUserIdAndProductIdAndProductIsActiveTrue(userId, product.getId());
 
@@ -305,6 +356,7 @@ public class ProductService {
                 .name(product.getName())
                 .imageUrl(product.getImageUrl())
                 .nutritionScore(product.getNutritionScore())
+                .grade(grade)
                 .isFavorited(favorited)
                 .brand(product.getBrand() == null ? null : ProductListResponse.BrandInfo.builder()
                         .id(product.getBrand().getId())
@@ -319,7 +371,8 @@ public class ProductService {
 
     private ProductDetailResponse toDetailResponse(Product product, ProductNutrient nutrient,
                                                    Long userId, CoupangLink coupangLink,
-                                                   ProductDetailResponse.PnsInfo pnsInfo) {
+                                                   ProductDetailResponse.PnsInfo pnsInfo,
+                                                   ProductDetailResponse.NutrientBounds nutrientBounds) {
         boolean favorited = userId != null &&
                 userFavoriteRepository.existsByUserIdAndProductIdAndProductIsActiveTrue(userId, product.getId());
 
@@ -328,6 +381,7 @@ public class ProductService {
                 .name(product.getName())
                 .imageUrl(product.getImageUrl())
                 .nutritionScore(product.getNutritionScore())
+                .grade(pnsInfo != null ? pnsInfo.grade() : null)
                 .viewCount(product.getViewCount())
                 .isFavorited(favorited)
                 .scoreRankPercent(null)
@@ -362,6 +416,7 @@ public class ProductService {
                         .lastSyncedAt(coupangLink.getLastSyncedAt())
                         .build())
                 .pns(pnsInfo)
+                .nutrientBounds(nutrientBounds)
                 .build();
     }
 
