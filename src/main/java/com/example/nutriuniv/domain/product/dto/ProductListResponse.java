@@ -15,6 +15,7 @@ public class ProductListResponse {
     private String imageUrl;
     private BigDecimal nutritionScore;
     private String grade;           // A~E 등급 (PNS 미계산 상품이면 null)
+    private Integer price;          // 쿠팡 LINKED 상품만 값 존재, 나머지 null
     private boolean isFavorited;
     private BrandInfo brand;
     private CategoryInfo category;

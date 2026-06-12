@@ -18,4 +18,6 @@ public interface CoupangLinkRepository extends JpaRepository<CoupangLink, Long> 
     List<CoupangLink> findAllByLinkStatus(String linkStatus);
 
     long countByLinkStatus(String linkStatus);
+
+    List<CoupangLink> findByProductIdIn(List<Long> productIds);
 }

@@ -99,8 +99,12 @@ public class ProductService {
         List<Long> productIds = page.getContent().stream().map(Product::getId).collect(Collectors.toList());
         Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
 
+        Map<Long, Integer> priceMap = coupangLinkRepository.findByProductIdIn(productIds).stream()
+                .filter(l -> "LINKED".equals(l.getLinkStatus()))
+                .collect(Collectors.toMap(l -> l.getProduct().getId(), CoupangLink::getProductPrice));
+
         List<ProductListResponse> items = page.getContent().stream()
-                .map(p -> toListResponse(p, userId, gradeMap.get(p.getId())))
+                .map(p -> toListResponse(p, userId, gradeMap.get(p.getId()), priceMap.get(p.getId())))
                 .collect(Collectors.toList());
 
         return ProductPageResponse.builder()
@@ -347,7 +351,7 @@ public class ProductService {
 
     // ── 변환 메서드 ───────────────────────────────────────────────────────────────
 
-    private ProductListResponse toListResponse(Product product, Long userId, String grade) {
+    private ProductListResponse toListResponse(Product product, Long userId, String grade, Integer price) {
         boolean favorited = userId != null &&
                 userFavoriteRepository.existsByUserIdAndProductIdAndProductIsActiveTrue(userId, product.getId());
 
@@ -357,6 +361,7 @@ public class ProductService {
                 .imageUrl(product.getImageUrl())
                 .nutritionScore(product.getNutritionScore())
                 .grade(grade)
+                .price(price)
                 .isFavorited(favorited)
                 .brand(product.getBrand() == null ? null : ProductListResponse.BrandInfo.builder()
                         .id(product.getBrand().getId())
@@ -381,7 +386,7 @@ public class ProductService {
                 .name(product.getName())
                 .imageUrl(product.getImageUrl())
                 .nutritionScore(product.getNutritionScore())
-                .grade(pnsInfo != null ? pnsInfo.grade() : null)
+                .grade(pnsInfo != null ? pnsInfo.getGrade() : null)
                 .viewCount(product.getViewCount())
                 .isFavorited(favorited)
                 .scoreRankPercent(null)
