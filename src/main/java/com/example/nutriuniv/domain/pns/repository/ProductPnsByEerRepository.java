@@ -12,7 +12,7 @@ import java.util.Map;
 
 public interface ProductPnsByEerRepository
         extends JpaRepository<ProductPnsByEer, ProductPnsByEer.PnsId>,
-                ProductPnsByEerCustom {
+        ProductPnsByEerCustom {
 
     @Modifying
     @Query("DELETE FROM ProductPnsByEer p WHERE p.eerBand = :band")
@@ -20,10 +20,7 @@ public interface ProductPnsByEerRepository
 }
 
 interface ProductPnsByEerCustom {
-    /** product → category(depth=2) → category(depth=1) parent_id 매핑. */
     List<Object[]> fetchProductsWithParentCategory();
-
-    /** 상품 ID 목록 + EER 밴드로 grade를 한 번에 조회. Map<productId, grade> 반환. */
     Map<Long, String> findGradesByProductIdsAndEerBand(List<Long> productIds, int eerBand);
 }
 
@@ -48,7 +45,7 @@ class ProductPnsByEerCustomImpl implements ProductPnsByEerCustom {
                 .getResultList();
         Map<Long, String> result = new java.util.HashMap<>();
         for (Object[] row : rows) {
-            result.put(((Number) row[0]).longValue(), (String) row[1]);
+            result.put(((Number) row[0]).longValue(), String.valueOf(row[1]));
         }
         return result;
     }
@@ -56,9 +53,6 @@ class ProductPnsByEerCustomImpl implements ProductPnsByEerCustom {
     @Override
     @SuppressWarnings("unchecked")
     public List<Object[]> fetchProductsWithParentCategory() {
-        // 반환: [product_id, parent_category_id,
-        //        carb, protein, fat, fiber, cholesterol,
-        //        satFat, transFat, sugar, sodium]
         String sql = """
             SELECT p.id,
                    c.parent_id,
