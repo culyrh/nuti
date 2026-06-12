@@ -103,7 +103,7 @@ public class AuthService {
     // ── POST /auth/refresh ────────────────────────────────────────────────────────
 
     @Transactional
-    public String refresh(RefreshRequest request) {
+    public TokenResponse refresh(RefreshRequest request) {
         AuthToken authToken = authTokenRepository.findByRefreshToken(request.getRefreshToken())
                 .orElseThrow(() -> new CustomException(ErrorCode.INVALID_TOKEN));
 
@@ -119,7 +119,10 @@ public class AuthService {
         authToken.rotate(newRefreshToken,
                 LocalDateTime.now().plusNanos(jwtService.getRefreshExpMs() * 1_000_000));
 
-        return newAccessToken;
+        return TokenResponse.builder()
+                .accessToken(newAccessToken)
+                .refreshToken(newRefreshToken)
+                .build();
     }
 
     // ── POST /auth/logout ─────────────────────────────────────────────────────────

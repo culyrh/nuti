@@ -20,6 +20,7 @@ public class LikePageResponse {
         private String name;
         private String imageUrl;
         private BigDecimal nutritionScore;
+        private String grade;       // A~E 등급 (PNS 미계산 상품이면 null)
         private BrandInfo brand;
     }
 

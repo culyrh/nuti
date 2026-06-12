@@ -73,7 +73,7 @@ public class AuthController {
 
     @Operation(summary = "액세스 토큰 재발급")
     @PostMapping("/refresh")
-    public ResponseEntity<CommonResponse<String>> refresh(@RequestBody RefreshRequest request) {
+    public ResponseEntity<CommonResponse<TokenResponse>> refresh(@RequestBody RefreshRequest request) {
         return ResponseEntity.ok(CommonResponse.success(authService.refresh(request)));
     }
 
