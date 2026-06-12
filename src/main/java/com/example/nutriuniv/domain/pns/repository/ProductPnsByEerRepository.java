@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 import java.util.List;
+import java.util.Map;
 
 public interface ProductPnsByEerRepository
         extends JpaRepository<ProductPnsByEer, ProductPnsByEer.PnsId>,
@@ -21,12 +22,36 @@ public interface ProductPnsByEerRepository
 interface ProductPnsByEerCustom {
     /** product → category(depth=2) → category(depth=1) parent_id 매핑. */
     List<Object[]> fetchProductsWithParentCategory();
+
+    /** 상품 ID 목록 + EER 밴드로 grade를 한 번에 조회. Map<productId, grade> 반환. */
+    Map<Long, String> findGradesByProductIdsAndEerBand(List<Long> productIds, int eerBand);
 }
 
 @RequiredArgsConstructor
 class ProductPnsByEerCustomImpl implements ProductPnsByEerCustom {
 
     private final EntityManager em;
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<Long, String> findGradesByProductIdsAndEerBand(List<Long> productIds, int eerBand) {
+        if (productIds == null || productIds.isEmpty()) return Map.of();
+        String sql = """
+            SELECT p.product_id, p.grade
+            FROM   product_pns_by_eer p
+            WHERE  p.product_id IN (:ids)
+              AND  p.eer_band   = :band
+            """;
+        List<Object[]> rows = em.createNativeQuery(sql)
+                .setParameter("ids", productIds)
+                .setParameter("band", eerBand)
+                .getResultList();
+        Map<Long, String> result = new java.util.HashMap<>();
+        for (Object[] row : rows) {
+            result.put(((Number) row[0]).longValue(), (String) row[1]);
+        }
+        return result;
+    }
 
     @Override
     @SuppressWarnings("unchecked")

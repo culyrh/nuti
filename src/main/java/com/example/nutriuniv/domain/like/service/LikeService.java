@@ -5,6 +5,7 @@ import com.example.nutriuniv.common.exception.ErrorCode;
 import com.example.nutriuniv.domain.like.dto.LikePageResponse;
 import com.example.nutriuniv.domain.like.entity.UserFavorite;
 import com.example.nutriuniv.domain.like.repository.UserFavoriteRepository;
+import com.example.nutriuniv.domain.pns.service.PnsLookupService;
 import com.example.nutriuniv.domain.product.entity.Product;
 import com.example.nutriuniv.domain.product.repository.ProductRepository;
 import com.example.nutriuniv.domain.user.entity.User;
@@ -17,6 +18,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -25,6 +28,7 @@ public class LikeService {
     private final UserFavoriteRepository userFavoriteRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
+    private final PnsLookupService pnsLookupService;
 
     // ── GET /likes ────────────────────────────────────────────────────────────────
 
@@ -38,6 +42,12 @@ public class LikeService {
         Page<UserFavorite> favPage = userFavoriteRepository
                 .findByUserIdAndProductIsActiveTrue(userId, pageable);
 
+        // 등급 IN 쿼리 (N+1 방지)
+        int eerBand = pnsLookupService.resolveEerBand(userId);
+        List<Long> productIds = favPage.getContent().stream()
+                .map(fav -> fav.getProduct().getId()).collect(Collectors.toList());
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+
         List<LikePageResponse.LikeItem> items = favPage.getContent().stream()
                 .map(fav -> {
                     Product p = fav.getProduct();
@@ -46,6 +56,7 @@ public class LikeService {
                             .name(p.getName())
                             .imageUrl(p.getImageUrl())
                             .nutritionScore(p.getNutritionScore())
+                            .grade(gradeMap.get(p.getId()))
                             .brand(p.getBrand() == null ? null :
                                     LikePageResponse.BrandInfo.builder()
                                             .id(p.getBrand().getId())
