@@ -32,4 +32,12 @@ public class PopularKeyword {
     @LastModifiedDate
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    public static PopularKeyword create(String keyword, int searchCount, int rank) {
+        PopularKeyword pk = new PopularKeyword();
+        pk.keyword = keyword;
+        pk.searchCount = searchCount;
+        pk.rank = rank;
+        return pk;
+    }
 }

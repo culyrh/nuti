@@ -32,7 +32,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/products", "/products/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/categories/**", "/brands").permitAll()
                         .requestMatchers("/logging/**").permitAll()
-                        .requestMatchers("/search/keywords/popular").permitAll()
+                        .requestMatchers("/search/keywords/popular", "/search/keywords/recommended").permitAll()
                         .requestMatchers(HttpMethod.GET, "/reviews/**").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/prometheus").permitAll()
