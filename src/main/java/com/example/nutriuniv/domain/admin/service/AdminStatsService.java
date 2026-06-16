@@ -8,6 +8,7 @@ import com.example.nutriuniv.domain.coupang.repository.CoupangDailyReportReposit
 import com.example.nutriuniv.domain.coupang.repository.CoupangLinkRepository;
 import com.example.nutriuniv.domain.logging.repository.ProductViewLogRepository;
 import com.example.nutriuniv.domain.logging.repository.SearchLogRepository;
+import com.example.nutriuniv.domain.logging.repository.VisitSessionRepository;
 import com.example.nutriuniv.domain.product.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -33,6 +34,7 @@ public class AdminStatsService {
     private final CoupangDailyReportRepository coupangDailyReportRepository;
     private final ProductViewLogRepository productViewLogRepository;
     private final SearchLogRepository searchLogRepository;
+    private final VisitSessionRepository visitSessionRepository;
 
     // ── GET /admin/dashboard ──────────────────────────────────────────────────────
 
@@ -108,6 +110,38 @@ public class AdminStatsService {
                         .uniqueKeywordCount(((Number) row[2]).longValue())
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    // ── GET /admin/stats/retention ────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public List<AdminRetentionResponse> getRetentionW2() {
+        return visitSessionRepository.findRetentionW2().stream()
+                .map(row -> {
+                    String cohort = (String) row[0];
+                    long w1Users = ((Number) row[1]).longValue();
+                    long retainedUsers = ((Number) row[2]).longValue();
+                    double rate = w1Users == 0 ? 0.0 : (double) retainedUsers / w1Users;
+                    return AdminRetentionResponse.builder()
+                            .cohort(cohort)
+                            .w1Users(w1Users)
+                            .retainedUsers(retainedUsers)
+                            .retentionRate(rate)
+                            .verdict(resolveVerdict(cohort, rate))
+                            .build();
+                })
+                .collect(Collectors.toList());
+    }
+
+    // warm 기준: ≥20% PASS / <7% FAIL / 7–20% S4. (cold는 참고용으로 동일 기준 표기)
+    private String resolveVerdict(String cohort, double rate) {
+        if (rate >= 0.20) {
+            return "PASS";
+        }
+        if (rate < 0.07) {
+            return "FAIL";
+        }
+        return "S4";
     }
 
     // ── 공통 날짜 검증 ─────────────────────────────────────────────────────────────
