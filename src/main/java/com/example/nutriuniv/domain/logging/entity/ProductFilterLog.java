@@ -1,7 +1,6 @@
 package com.example.nutriuniv.domain.logging.entity;
 
 import com.example.nutriuniv.domain.logging.dto.LogContext;
-import com.example.nutriuniv.domain.product.entity.Product;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -11,51 +10,54 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
+/**
+ * compare_or_filter_used — 필터/정렬/등급정렬 사용 이벤트.
+ * 활성화·유효방문에는 포함하지 않는 "핵심 행동" 지표.
+ */
 @Entity
-@Table(name = "product_view_logs",
-        indexes = @Index(name = "idx_view_logs_anon", columnList = "anonymous_id"))
+@Table(name = "product_filter_logs",
+        indexes = @Index(name = "idx_filter_logs_anon", columnList = "anonymous_id"))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @EntityListeners(AuditingEntityListener.class)
-public class ProductViewLog {
+public class ProductFilterLog {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "product_id", nullable = false)
-    private Product product;
-
     @Column(name = "user_id")
     private Long userId;
 
-    // 비로그인 식별자 (localStorage UUID) — 재방문 추적의 핵심
     @Column(name = "anonymous_id", length = 36)
     private String anonymousId;
 
     @Column(name = "session_id", length = 36)
     private String sessionId;
 
-    // warm / cold
     @Column(name = "cohort", length = 10)
     private String cohort;
 
-    @Column(name = "ip_address", length = 45)
-    private String ipAddress;
+    // 필터 종류: category / brand / sort / grade_sort 등
+    @Column(name = "filter_type", nullable = false, length = 30)
+    private String filterType;
+
+    // 선택된 값(선택): 정렬키, 카테고리ID 등 — 분석 보조용
+    @Column(name = "filter_value", length = 100)
+    private String filterValue;
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    public static ProductViewLog create(Product product, LogContext ctx) {
-        ProductViewLog log = new ProductViewLog();
-        log.product = product;
+    public static ProductFilterLog create(LogContext ctx, String filterType, String filterValue) {
+        ProductFilterLog log = new ProductFilterLog();
         log.userId = ctx.userId();
         log.anonymousId = ctx.anonymousId();
         log.sessionId = ctx.sessionId();
         log.cohort = ctx.cohort();
-        log.ipAddress = ctx.ipAddress();
+        log.filterType = filterType;
+        log.filterValue = filterValue;
         return log;
     }
 }
