@@ -64,4 +64,14 @@ public class AdminStatsController {
         return ResponseEntity.ok(CommonResponse.success(
                 adminStatsService.getSearchStats(startDate, endDate)));
     }
+
+    // GET /admin/stats/retention
+    @Operation(summary = "재방문 W2 합격 바 (return_visit)",
+            description = "cohort(warm/cold)별 W2 리텐션. W1(Day0–6) 유효 방문 유저 중 " +
+                    "4주 창(Day7–27) 내 유기적 유효 재방문 비율. " +
+                    "warm ≥20% PASS / <7% FAIL / 7–20% S4. (측정 창에 리마인드 미발송 전제)")
+    @GetMapping("/admin/stats/retention")
+    public ResponseEntity<CommonResponse<List<AdminRetentionResponse>>> getRetention() {
+        return ResponseEntity.ok(CommonResponse.success(adminStatsService.getRetentionW2()));
+    }
 }

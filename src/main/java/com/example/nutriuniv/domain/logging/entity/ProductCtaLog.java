@@ -1,5 +1,6 @@
 package com.example.nutriuniv.domain.logging.entity;
 
+import com.example.nutriuniv.domain.logging.dto.LogContext;
 import com.example.nutriuniv.domain.product.entity.Product;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -12,7 +13,10 @@ import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "product_cta_logs",
-        indexes = @Index(name = "idx_cta_logs_user_product", columnList = "user_id, product_id"))
+        indexes = {
+                @Index(name = "idx_cta_logs_user_product", columnList = "user_id, product_id"),
+                @Index(name = "idx_cta_logs_anon", columnList = "anonymous_id")
+        })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @EntityListeners(AuditingEntityListener.class)
@@ -29,6 +33,15 @@ public class ProductCtaLog {
     @Column(name = "user_id")
     private Long userId;
 
+    @Column(name = "anonymous_id", length = 36)
+    private String anonymousId;
+
+    @Column(name = "session_id", length = 36)
+    private String sessionId;
+
+    @Column(name = "cohort", length = 10)
+    private String cohort;
+
     @Column(name = "ip_address", length = 45)
     private String ipAddress;
 
@@ -36,11 +49,14 @@ public class ProductCtaLog {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    public static ProductCtaLog create(Product product, Long userId, String ipAddress) {
+    public static ProductCtaLog create(Product product, LogContext ctx) {
         ProductCtaLog log = new ProductCtaLog();
         log.product = product;
-        log.userId = userId;
-        log.ipAddress = ipAddress;
+        log.userId = ctx.userId();
+        log.anonymousId = ctx.anonymousId();
+        log.sessionId = ctx.sessionId();
+        log.cohort = ctx.cohort();
+        log.ipAddress = ctx.ipAddress();
         return log;
     }
 }
