@@ -42,6 +42,7 @@ public class PopularKeywordBatchService {
 
     // 앱 기동 직후 1회 — 다음 정각 전까지 비어있지 않게 시드
     @EventListener(ApplicationReadyEvent.class)
+    @Transactional
     public void initOnStartup() {
         try {
             refreshTodayRanking();
