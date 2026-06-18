@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -65,6 +66,7 @@ public class AuthService {
     @Transactional
     public TokenResponse register(RegisterRequest request) {
 
+        // ── 기본 필드 검증 ────────────────────────────────────────────────────────
         if (request.getName() == null || request.getName().isBlank()) {
             throw new CustomException(ErrorCode.BAD_REQUEST, "이름은 필수입니다.");
         }
@@ -78,23 +80,32 @@ public class AuthService {
             throw new CustomException(ErrorCode.BAD_REQUEST, "provider와 oauthId는 필수입니다.");
         }
 
-        // 유효한 provider인지 검증 (OAuthProvider.from이 내부에서 예외 던짐)
+        // ── 만 14세 미만 가입 차단 ────────────────────────────────────────────────
+        if (request.getBirthDate().isAfter(LocalDate.now().minusYears(14))) {
+            throw new CustomException(ErrorCode.BAD_REQUEST, "만 14세 미만은 가입할 수 없습니다.");
+        }
+
+        // ── provider 검증 ─────────────────────────────────────────────────────────
         OAuthClientFactory.validateProvider(request.getProvider());
 
         String normalizedProvider = request.getProvider().toLowerCase();
 
-        // 이미 가입된 경우 방어
+        // ── 중복 가입 방어 ────────────────────────────────────────────────────────
         if (userRepository.findByOauthProviderAndOauthId(normalizedProvider, request.getOauthId()).isPresent()) {
             throw new CustomException(ErrorCode.DUPLICATE_RESOURCE, "이미 가입된 사용자입니다.");
         }
 
+        // ── 유저 생성 ─────────────────────────────────────────────────────────────
         User user = userRepository.save(User.create(
                 normalizedProvider,
                 request.getOauthId(),
                 request.getName(),
                 request.getGender(),
                 request.getBirthDate(),
-                request.getEmail()
+                request.getEmail(),
+                request.isPersonalInfoAgreed(),
+                request.isHealthInfoAgreed(),
+                request.isAgeConfirmed()
         ));
 
         return issueToken(user, true);

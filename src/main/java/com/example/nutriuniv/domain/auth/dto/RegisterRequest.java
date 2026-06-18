@@ -31,4 +31,13 @@ public class RegisterRequest {
     @NotNull(message = "올바른 정보를 입력해 주세요.")
     @PastOrPresent(message = "올바른 정보를 입력해 주세요.")
     private LocalDate birthDate;
+
+    // ── 동의 항목 ─────────────────────────────────────────────────────────────────
+    @AssertTrue(message = "개인정보 수집·이용에 동의해야 합니다.")
+    private boolean personalInfoAgreed;  // ① 개인정보 수집·이용 동의 (필수)
+
+    private boolean healthInfoAgreed;    // ② 건강정보 수집·이용 동의 (선택)
+
+    @AssertTrue(message = "만 14세 이상 확인이 필요합니다.")
+    private boolean ageConfirmed;        // ③ 만 14세 이상 확인 (필수)
 }

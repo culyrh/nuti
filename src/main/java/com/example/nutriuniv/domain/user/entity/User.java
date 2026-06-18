@@ -53,6 +53,22 @@ public class User {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    // ── 동의 관련 필드 ────────────────────────────────────────────────────────────
+
+    @Column(name = "personal_info_agreed", nullable = false)
+    private boolean personalInfoAgreed = false;  // ① 개인정보 수집·이용 동의 (필수)
+
+    @Column(name = "health_info_agreed", nullable = false)
+    private boolean healthInfoAgreed = false;    // ② 건강정보 수집·이용 동의 (선택)
+
+    @Column(name = "age_confirmed", nullable = false)
+    private boolean ageConfirmed = false;        // ③ 만 14세 이상 확인 (필수)
+
+    @Column(name = "consented_at")
+    private LocalDateTime consentedAt;           // 동의 시각
+
+    // ── Audit ─────────────────────────────────────────────────────────────────────
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -61,18 +77,27 @@ public class User {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    // ── 생성 ─────────────────────────────────────────────────────────────────────
+
     public static User create(String oauthProvider, String oauthId,
-                              String name, String gender, LocalDate birthDate, String email) {
+                              String name, String gender, LocalDate birthDate, String email,
+                              boolean personalInfoAgreed, boolean healthInfoAgreed, boolean ageConfirmed) {
         User u = new User();
-        u.oauthProvider = oauthProvider;
-        u.oauthId = oauthId;
-        u.name = name;
-        u.nickname = name;  // 가입 시 name으로 자동 설정
-        u.gender = gender;
-        u.birthDate = birthDate;
-        u.email = email;
+        u.oauthProvider      = oauthProvider;
+        u.oauthId            = oauthId;
+        u.name               = name;
+        u.nickname           = name;  // 가입 시 name으로 자동 설정
+        u.gender             = gender;
+        u.birthDate          = birthDate;
+        u.email              = email;
+        u.personalInfoAgreed = personalInfoAgreed;
+        u.healthInfoAgreed   = healthInfoAgreed;
+        u.ageConfirmed       = ageConfirmed;
+        u.consentedAt        = LocalDateTime.now();
         return u;
     }
+
+    // ── 수정 ─────────────────────────────────────────────────────────────────────
 
     public void update(String name, String email, String nickname, String gender, LocalDate birthDate) {
         if (name != null)      this.name      = name;
@@ -83,7 +108,7 @@ public class User {
     }
 
     public void deactivate() {
-        this.isActive = false;
+        this.isActive  = false;
         this.deletedAt = LocalDateTime.now();
     }
 
