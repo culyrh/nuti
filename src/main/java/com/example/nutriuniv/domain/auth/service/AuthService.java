@@ -29,12 +29,13 @@ public class AuthService {
     private final UserRepository userRepository;
     private final AuthTokenRepository authTokenRepository;
     private final JwtService jwtService;
-    private final OAuthClientFactory oAuthClientFactory; // GoogleOAuthClient 직접 의존 제거
+    private final OAuthClientFactory oAuthClientFactory;
 
     // ── POST /auth/oauth ──────────────────────────────────────────────────────────
     // provider에 맞는 OAuthClient를 팩토리에서 꺼내 처리.
     // 신규회원이면 email + oauthId 반환 (토큰 미발급)
     // 기존회원이면 바로 토큰 발급
+    // 탈퇴 후 재가입 시 is_active=false 유저는 신규회원으로 처리
 
     @Transactional
     public TokenResponse login(OAuthLoginRequest request) {
@@ -43,10 +44,11 @@ public class AuthService {
         String accessToken = client.getAccessToken(request.getCode());
         OAuthUserInfo userInfo = client.getUserInfo(accessToken);
 
-        Optional<User> existing = userRepository.findByOauthProviderAndOauthId(
+        // is_active=true인 유저만 조회 → 탈퇴 유저는 신규회원으로 처리됨
+        Optional<User> existing = userRepository.findByOauthProviderAndOauthIdAndIsActiveTrue(
                 request.getProvider().toLowerCase(), userInfo.getOauthId());
 
-        // 신규회원: 토큰 발급 없이 email + oauthId만 반환
+        // 신규회원 (또는 탈퇴 후 재가입): 토큰 발급 없이 email + oauthId만 반환
         if (existing.isEmpty()) {
             return TokenResponse.builder()
                     .isNewUser(true)
@@ -55,7 +57,7 @@ public class AuthService {
                     .build();
         }
 
-        // 기존회원: 바로 토큰 발급
+        // 기존 활성 회원: 바로 토큰 발급
         User user = existing.get();
         return issueToken(user, false);
     }
@@ -90,8 +92,8 @@ public class AuthService {
 
         String normalizedProvider = request.getProvider().toLowerCase();
 
-        // ── 중복 가입 방어 ────────────────────────────────────────────────────────
-        if (userRepository.findByOauthProviderAndOauthId(normalizedProvider, request.getOauthId()).isPresent()) {
+        // ── 중복 가입 방어 (활성 유저만 체크, 탈퇴 유저는 재가입 허용) ────────────
+        if (userRepository.findByOauthProviderAndOauthIdAndIsActiveTrue(normalizedProvider, request.getOauthId()).isPresent()) {
             throw new CustomException(ErrorCode.DUPLICATE_RESOURCE, "이미 가입된 사용자입니다.");
         }
 
