@@ -110,6 +110,7 @@ public class User {
     public void deactivate() {
         this.isActive  = false;
         this.deletedAt = LocalDateTime.now();
+        this.oauthId   = "DELETED_" + this.id;  // ✅ 추가: unique 충돌 방지 (재가입 허용)
     }
 
     public void updateRole(String role) {

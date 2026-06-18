@@ -48,6 +48,8 @@ public class UserService {
     public void deleteMe(Long userId, String reason) {
         User user = getUser(userId);
         authTokenRepository.deleteByUserId(userId);
+        // deactivate() 내부에서 oauthId를 "DELETED_{id}"로 초기화함
+        // → 같은 소셜 계정으로 재가입 시 DB unique constraint 충돌 방지
         user.deactivate();
         // TODO: user_withdraw_reasons 저장, user_favorites 삭제
     }
