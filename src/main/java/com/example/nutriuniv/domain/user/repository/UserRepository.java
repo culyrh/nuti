@@ -10,7 +10,9 @@ import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 
 public interface UserRepository extends JpaRepository<User, Long> {
-    Optional<User> findByOauthProviderAndOauthId(String oauthProvider, String oauthId);
+
+    // 활성 유저만 조회 (탈퇴 유저 제외)
+    Optional<User> findByOauthProviderAndOauthIdAndIsActiveTrue(String oauthProvider, String oauthId);
 
     // 관리자 유저 검색 (이름 또는 이메일)
     @Query("SELECT u FROM User u WHERE :keyword IS NULL OR u.name LIKE %:keyword% OR u.email LIKE %:keyword%")
