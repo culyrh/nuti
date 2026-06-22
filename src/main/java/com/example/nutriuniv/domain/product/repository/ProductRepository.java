@@ -25,9 +25,23 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     boolean existsByCategoryIdAndIsActiveTrue(Long categoryId);
 
     // 카테고리별 브랜드 목록 + 상품 수 (GET /categories/{id}/brands)
-    @Query("SELECT p.brand, COUNT(p) FROM Product p " +
-            "WHERE p.category.id = :categoryId AND p.isActive = true AND p.brand IS NOT NULL " +
-            "GROUP BY p.brand")
+    // depth1 → depth2 → depth3 계층 전체 커버
+    @Query("""
+        SELECT p.brand, COUNT(p)
+        FROM Product p
+        WHERE p.isActive = true
+          AND p.brand IS NOT NULL
+          AND p.category.id IN (
+              SELECT c.id FROM Category c
+              WHERE c.id = :categoryId
+                 OR c.parent.id = :categoryId
+                 OR c.parent.id IN (
+                     SELECT c2.id FROM Category c2
+                     WHERE c2.parent.id = :categoryId
+                 )
+          )
+        GROUP BY p.brand
+    """)
     List<Object[]> findBrandCountByCategoryId(@Param("categoryId") Long categoryId);
 
     // 전체 브랜드별 상품 수 (GET /brands)
@@ -56,4 +70,3 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     @EntityGraph(attributePaths = {"brand", "category"})
     List<Product> findTopByIsActiveTrueOrderByViewCountDesc(Pageable pageable);
 }
-
