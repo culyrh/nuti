@@ -12,6 +12,7 @@ public class ReviewPageResponse {
 
     private long total;
     private Double avgScoreOverall;
+    private Boolean canReview; // 비로그인 null, 작성 가능 true, 작성 불가 false
     private List<ReviewItem> items;
 
     @Getter
