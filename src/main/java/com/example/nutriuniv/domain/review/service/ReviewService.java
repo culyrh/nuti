@@ -57,6 +57,7 @@ public class ReviewService {
                                 .map(ReviewImage::getImageUrl)
                                 .toList())
                         .createdAt(r.getCreatedAt())
+                        .updatedAt(r.getUpdatedAt())
                         .build())
                 .toList();
 
@@ -77,7 +78,7 @@ public class ReviewService {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new CustomException(ErrorCode.RESOURCE_NOT_FOUND, "존재하지 않는 상품입니다."));
 
-        if (reviewRepository.existsByUserIdAndProductIdAndIsActiveTrue(userId, productId)) {
+        if (reviewRepository.existsByUserIdAndProductId(userId, productId)) {
             throw new CustomException(ErrorCode.DUPLICATE_RESOURCE, "이미 해당 상품에 리뷰를 작성했습니다.");
         }
 

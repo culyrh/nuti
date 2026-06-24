@@ -23,5 +23,6 @@ public class ReviewPageResponse {
         private String content;
         private List<String> images;
         private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
     }
 }
