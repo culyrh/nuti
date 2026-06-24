@@ -33,7 +33,7 @@ public class ReviewService {
     // ── GET /reviews/{productId} ──────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public ReviewPageResponse getReviews(Long productId, int page, int size) {
+    public ReviewPageResponse getReviews(Long productId, int page, int size, Long userId) {
         if (page < 1 || size < 1) {
             throw new CustomException(ErrorCode.INVALID_QUERY_PARAM, "page, size는 1 이상이어야 합니다.");
         }
@@ -46,6 +46,11 @@ public class ReviewService {
         Page<Review> reviewPage = reviewRepository.findByProductIdAndIsActiveTrue(productId, pageable);
 
         Double avgOverall = reviewRepository.avgScoreOverall(productId);
+
+        // 비로그인이면 null, 로그인이면 작성 이력(삭제 포함) 없을 때만 true
+        Boolean canReview = (userId != null)
+                ? !reviewRepository.existsByUserIdAndProductId(userId, productId)
+                : null;
 
         List<ReviewPageResponse.ReviewItem> items = reviewPage.getContent().stream()
                 .map(r -> ReviewPageResponse.ReviewItem.builder()
@@ -64,6 +69,7 @@ public class ReviewService {
         return ReviewPageResponse.builder()
                 .total(reviewPage.getTotalElements())
                 .avgScoreOverall(round(avgOverall))
+                .canReview(canReview)
                 .items(items)
                 .build();
     }

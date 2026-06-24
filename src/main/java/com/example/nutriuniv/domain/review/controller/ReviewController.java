@@ -30,10 +30,13 @@ public class ReviewController {
     public ResponseEntity<CommonResponse<ReviewPageResponse>> getReviews(
             @Parameter(description = "상품 ID") @PathVariable Long productId,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size) {
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal UserPrincipal principal) { // 비로그인 시 null
+
+        Long userId = (principal != null) ? principal.getId() : null;
 
         return ResponseEntity.ok(CommonResponse.success(
-                reviewService.getReviews(productId, page, size)));
+                reviewService.getReviews(productId, page, size, userId)));
     }
 
     // POST /reviews/{productId}
