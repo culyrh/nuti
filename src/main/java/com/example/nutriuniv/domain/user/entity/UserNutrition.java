@@ -51,11 +51,11 @@ public class UserNutrition {
     @Column(name = "exercise_intensity", nullable = false, length = 10)
     private String exerciseIntensity;
 
-    @Column(name = "daily_meal_count", nullable = false)
-    private int dailyMealCount;
+    @Column(name = "daily_meal_count")
+    private Integer dailyMealCount;
 
-    @Column(name = "daily_snack_count", nullable = false)
-    private int dailySnackCount;
+    @Column(name = "daily_snack_count")
+    private Integer dailySnackCount;
 
     @Column(precision = 7, scale = 2)
     private BigDecimal eer;
@@ -74,7 +74,7 @@ public class UserNutrition {
                                        BigDecimal bodyFatRate, BigDecimal skeletalMuscleMass,
                                        String dietPurpose, String activityType,
                                        int weeklyExerciseCount, String exerciseIntensity,
-                                       int dailyMealCount, int dailySnackCount) {
+                                       Integer dailyMealCount, Integer dailySnackCount) {
         UserNutrition n = new UserNutrition();
         n.user = user;
         n.height = height;
@@ -95,7 +95,7 @@ public class UserNutrition {
                        BigDecimal bodyFatRate, BigDecimal skeletalMuscleMass,
                        String dietPurpose, String activityType,
                        int weeklyExerciseCount, String exerciseIntensity,
-                       int dailyMealCount, int dailySnackCount) {
+                       Integer dailyMealCount, Integer dailySnackCount) {
         this.height = height;
         this.weight = weight;
         this.bodyFatRate = bodyFatRate;

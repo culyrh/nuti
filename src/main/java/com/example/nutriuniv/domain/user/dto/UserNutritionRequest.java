@@ -35,6 +35,6 @@ public class UserNutritionRequest {
     private String activityType;
     private int weeklyExerciseCount;
     private String exerciseIntensity;
-    private int dailyMealCount;
-    private int dailySnackCount;
+    private Integer dailyMealCount;
+    private Integer dailySnackCount;
 }
