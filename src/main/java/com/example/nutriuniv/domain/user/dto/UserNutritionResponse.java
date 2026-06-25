@@ -17,8 +17,8 @@ public class UserNutritionResponse {
     private String activityType;
     private int weeklyExerciseCount;
     private String exerciseIntensity;
-    private int dailyMealCount;
-    private int dailySnackCount;
+    private Integer dailyMealCount;
+    private Integer dailySnackCount;
 
     public static UserNutritionResponse from(UserNutrition n) {
         return UserNutritionResponse.builder()
