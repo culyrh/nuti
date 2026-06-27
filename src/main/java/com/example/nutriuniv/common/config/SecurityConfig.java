@@ -3,6 +3,7 @@ package com.example.nutriuniv.common.config;
 import com.example.nutriuniv.common.security.JwtAuthenticationFilter;
 import com.example.nutriuniv.common.security.JwtService;
 import com.example.nutriuniv.domain.user.repository.UserRepository;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,6 +27,15 @@ public class SecurityConfig {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType("application/json;charset=UTF-8");
+                            response.getWriter().write(
+                                    "{\"success\":false,\"code\":\"UNAUTHORIZED\",\"message\":\"인증이 필요합니다.\"}"
+                            );
+                        })
+                )
                 .authorizeHttpRequests(auth -> auth
                         // public
                         .requestMatchers("/auth/**").permitAll()
