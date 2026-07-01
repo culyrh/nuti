@@ -62,9 +62,9 @@ class ProductPnsByEerCustomImpl implements ProductPnsByEerCustom {
 
         if (productIds == null || productIds.isEmpty()) return Map.of();
 
-        // Native query에서 named parameter 대신 positional parameter 사용
+        // grade를 CAST로 명시적으로 VARCHAR 변환 → Character 캐스팅 오류 방지
         String sql = """
-                SELECT p.product_id, p.grade
+                SELECT p.product_id, CAST(p.grade AS VARCHAR)
                 FROM   product_pns_by_eer p
                 WHERE  p.product_id = ANY(?1)
                   AND  p.eer_band   = ?2
@@ -78,7 +78,7 @@ class ProductPnsByEerCustomImpl implements ProductPnsByEerCustom {
 
         Map<Long, String> result = new java.util.HashMap<>();
         for (Object[] row : rows) {
-            result.put(((Number) row[0]).longValue(), (String) row[1]);
+            result.put(((Number) row[0]).longValue(), String.valueOf(row[1]));
         }
         return result;
     }
@@ -88,7 +88,6 @@ class ProductPnsByEerCustomImpl implements ProductPnsByEerCustom {
     public ProductPnsByEer findOneByProductIdAndEerBandAndGoal(
             Long productId, int eerBand, String goal) {
 
-        // Native query에서 named parameter 대신 positional parameter 사용
         String sql = """
                 SELECT *
                 FROM   product_pns_by_eer
