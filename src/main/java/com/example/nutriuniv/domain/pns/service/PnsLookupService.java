@@ -14,22 +14,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * 상품 응답에 PNS 점수/등급/백분위를 채워주기 위한 조회 헬퍼.
- *
- * 비로그인 또는 eer_band 미입력 사용자는 기본 EER 2000 구간을 사용.
- */
 @Service
 @RequiredArgsConstructor
 public class PnsLookupService {
 
-    public static final int DEFAULT_EER_BAND = 2000;
+    public static final int    DEFAULT_EER_BAND = 2000;
+    public static final String DEFAULT_GOAL     = "diet";
 
-    private final UserNutritionRepository userNutritionRepository;
+    private final UserNutritionRepository   userNutritionRepository;
     private final ProductPnsByEerRepository pnsRepository;
-    private final EntityManager em;
+    private final EntityManager             em;
 
-    /** userId가 null 이거나 eer_band가 없으면 기본값(2000). */
     @Transactional(readOnly = true)
     public int resolveEerBand(Long userId) {
         if (userId == null) return DEFAULT_EER_BAND;
@@ -39,55 +34,73 @@ public class PnsLookupService {
                 .orElse(DEFAULT_EER_BAND);
     }
 
-    /** 점수가 아직 계산 안 된 상품이면 null. */
+    /**
+     * 사용자의 diet_purpose를 PNS goal로 변환.
+     *  - "벌크업" → "bulk"
+     *  - 그 외(다이어트 등) → "diet"
+     *  - 비로그인 / 미입력 → "diet"
+     */
     @Transactional(readOnly = true)
-    public PnsLookupResult lookup(Long productId, int eerBand) {
-        ProductPnsByEer pns = pnsRepository.findById(
-                new ProductPnsByEer.PnsId(productId, eerBand)).orElse(null);
+    public String resolveGoal(Long userId) {
+        if (userId == null) return DEFAULT_GOAL;
+        return userNutritionRepository.findByUserId(userId)
+                .map(UserNutrition::getDietPurpose)
+                .map(p -> "벌크업".equals(p) ? "bulk" : "diet")
+                .orElse(DEFAULT_GOAL);
+    }
+
+    @Transactional(readOnly = true)
+    public PnsLookupResult lookup(Long productId, int eerBand, String goal) {
+        ProductPnsByEer pns = pnsRepository.findOneByProductIdAndEerBandAndGoal(productId, eerBand, goal);
         if (pns == null) return null;
 
         BigDecimal percentile = pns.getPercentile();
         BigDecimal topPercent = percentile == null
                 ? null
-                : BigDecimal.valueOf(100).subtract(percentile).setScale(2, java.math.RoundingMode.HALF_UP);
+                : BigDecimal.valueOf(100).subtract(percentile)
+                .setScale(2, java.math.RoundingMode.HALF_UP);
 
         return new PnsLookupResult(
                 pns.getScore(),
                 pns.getGrade(),
+                pns.getHealthScore(),
                 percentile,
                 topPercent,
-                eerBand
+                eerBand,
+                goal
         );
     }
 
-    /** 대분류 안의 활성 상품 수. parentCategoryId가 null이면 0. */
+    @Transactional(readOnly = true)
+    public Map<Long, String> lookupGrades(List<Long> productIds, int eerBand, String goal) {
+        return pnsRepository.findGradesByProductIdsAndEerBandAndGoal(productIds, eerBand, goal);
+    }
+
     @Transactional(readOnly = true)
     public int countActiveByParentCategory(Long parentCategoryId) {
         if (parentCategoryId == null) return 0;
+
+        // Native query positional parameter 사용
         String sql = """
-            SELECT COUNT(*)
-            FROM   products p
-            JOIN   categories c ON p.category_id = c.id
-            WHERE  c.parent_id = :pid
-              AND  p.is_active = TRUE
-            """;
+                SELECT COUNT(*)
+                FROM   products p
+                JOIN   categories c ON p.category_id = c.id
+                WHERE  c.parent_id = ?1
+                  AND  p.is_active = TRUE
+                """;
         Number cnt = (Number) em.createNativeQuery(sql)
-                .setParameter("pid", parentCategoryId)
+                .setParameter(1, parentCategoryId)
                 .getSingleResult();
         return cnt == null ? 0 : cnt.intValue();
     }
 
-    /** 상품 목록용 — productId 리스트를 한 번에 조회해서 Map&lt;productId, grade&gt; 반환. */
-    @Transactional(readOnly = true)
-    public Map<Long, String> lookupGrades(List<Long> productIds, int eerBand) {
-        return pnsRepository.findGradesByProductIdsAndEerBand(productIds, eerBand);
-    }
-
     public record PnsLookupResult(
             BigDecimal score,
-            String grade,
+            String     grade,
+            BigDecimal healthScore,
             BigDecimal percentile,
             BigDecimal topPercent,
-            int eerBand
+            int        eerBand,
+            String     goal
     ) {}
 }

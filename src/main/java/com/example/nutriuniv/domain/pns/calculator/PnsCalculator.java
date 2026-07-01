@@ -1,110 +1,205 @@
 package com.example.nutriuniv.domain.pns.calculator;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /**
- * PFS 점수 산출 (Hwang et al. 2025) + KDRI 2025.
+ * PNS 점수 산출 — 기능명세서 v4.1
  *
- * Eq.1 (적정 범위, 탄·단·지)
- * Eq.2 (양↑좋음, 식이섬유)
- * Eq.3 (콜레스테롤)
- * Eq.4 (양↑나쁨, 포화·트랜스·당·나트륨)
- * Eq.5 PFS = Σ 9개 영양소 점수
+ * 입력 단위 : 100g당 기준
+ * goal      : "diet" | "bulk"
  *
- * 입력 영양값 단위 (1회 제공량 기준):
- *   carb/protein/fat/fiber/satFat/transFat/sugar : g
- *   cholesterol : mg
- *   sodium      : mg
+ * 파이프라인
+ *   Step1. B (유익)  = protein + fiber 기여
+ *   Step2. L (제한)  = 나쁜 영양소 5개 합산
+ *   Step3. core      = B - L
+ *   Step4. ED        = 에너지밀도 (goal별 M 기준)
+ *   Step5. raw       = core - ED (diet) / core + ED (bulk)
+ *   Step6. score     = raw → 0~100 정규화 (고정 앵커)
+ *          health    = core → 0~100 정규화 (고정 앵커)
  */
 public final class PnsCalculator {
 
+    // ── 정규화 앵커 (1,924개 채점셋 P1/P99 동결) ──────────────────────────────
+    private static final double DIET_RAW_LO   = -1.76;
+    private static final double DIET_RAW_HI   =  1.35;
+    private static final double BULK_RAW_LO   = -0.60;
+    private static final double BULK_RAW_HI   =  2.69;
+    private static final double HEALTH_RAW_LO = -1.07;
+    private static final double HEALTH_RAW_HI =  1.81;
+
+    // ── EER 범위 끝점 (diet M 계산용) ─────────────────────────────────────────
+    private static final double EER_MIN = 1500.0;
+    private static final double EER_MAX = 2600.0;
+
+    // ── 유익 만점선 ────────────────────────────────────────────────────────────
+    private static final double PROTEIN_MAX = 11.0;  // g/100g
+    private static final double FIBER_MAX   =  6.0;  // g/100g
+
+    // ── 제한 감점 구간 [시작, 최대] ───────────────────────────────────────────
+    private static final double SUGAR_LO   =    5.0;  private static final double SUGAR_HI   = 100.0;
+    private static final double SATFAT_LO  =    1.5;  private static final double SATFAT_HI  =  15.0;
+    private static final double SODIUM_LO  =  120.0;  private static final double SODIUM_HI  = 2000.0;
+    private static final double CHOL_LO    =   20.0;  private static final double CHOL_HI    =  300.0;
+    private static final double TRANS_LO   =    0.2;  private static final double TRANS_HI   =   2.0;
+
+    // ── 에너지밀도 ─────────────────────────────────────────────────────────────
+    private static final double ED_ZERO = 40.0;   // kcal/100g 이하 → ED=0
+    private static final double M_MIN   = 400.0;
+    private static final double M_MAX   = 900.0;
+    private static final double BULK_M  = 400.0;  // bulk 고정
+
     private PnsCalculator() {}
 
+    // ── 반환 타입 ──────────────────────────────────────────────────────────────
+
     public static class Result {
-        public final double score;
-        public final String grade;
+        public final double score;        // 0~100, 소수 1자리
+        public final String grade;        // A~E
+        public final double healthScore;  // goal 무관 건강점수
+        public final Breakdown breakdown; // 중간값 (디버깅용)
 
-        Result(double score, String grade) {
-            this.score = score;
-            this.grade = grade;
+        Result(double score, String grade, double healthScore, Breakdown breakdown) {
+            this.score       = score;
+            this.grade       = grade;
+            this.healthScore = healthScore;
+            this.breakdown   = breakdown;
         }
     }
 
-    public static Result calculate(int eerBand, double mealRatio,
-                                   BigDecimal carb, BigDecimal protein, BigDecimal fat,
-                                   BigDecimal fiber, BigDecimal cholesterol,
-                                   BigDecimal satFat, BigDecimal transFat,
-                                   BigDecimal sugar, BigDecimal sodium) {
-        double eer = eerBand;
+    public static class Breakdown {
+        public final double B;
+        public final double L;
+        public final double core;
+        public final double M;
+        public final double ED;
+        public final double raw;
 
-        // 일일 권장량 → 1회 섭취 기준
-        double carbMin   = eer * 0.50 / 4 * mealRatio;
-        double carbMax   = eer * 0.65 / 4 * mealRatio;
-        double protMin   = eer * 0.10 / 4 * mealRatio;
-        double protMax   = eer * 0.20 / 4 * mealRatio;
-        double fatMin    = eer * 0.15 / 9 * mealRatio;
-        double fatMax    = eer * 0.30 / 9 * mealRatio;
-        double fiberMin  = eer * 12.0 / 1000 * mealRatio;
-        double cholMax   = 300.0 * mealRatio;
-        double satMax    = eer * 0.07 / 9 * mealRatio;
-        double transMax  = eer * 0.01 / 9 * mealRatio;
-        double sugarMax  = eer * 0.10 / 4 * mealRatio;
-        double sodiumMax = 2300.0 * mealRatio;
-
-        double s = 0.0;
-        s += eq1(asDouble(carb),    carbMin, carbMax);
-        s += eq1(asDouble(protein), protMin, protMax);
-        s += eq1(asDouble(fat),     fatMin,  fatMax);
-        s += eq2(asDouble(fiber),   fiberMin);
-        s += eq3(asDouble(cholesterol), cholMax);
-        s += eq4(asDouble(satFat),   satMax);
-        s += eq4(asDouble(transFat), transMax);
-        s += eq4(asDouble(sugar),    sugarMax);
-        s += eq4(asDouble(sodium),   sodiumMax);
-
-        return new Result(s, toGrade(s));
-    }
-
-    /** Eq.1 — Nx<Nmin: 1-((Nx-Nmin)/Nmin)², Nmin~Nmax: 1, Nx>Nmax: 1-((Nx-Nmax)/Nmin)² */
-    private static double eq1(double nx, double nmin, double nmax) {
-        if (nx < nmin) {
-            double r = (nx - nmin) / nmin;
-            return 1 - r * r;
+        Breakdown(double B, double L, double core, double M, double ED, double raw) {
+            this.B    = B;
+            this.L    = L;
+            this.core = core;
+            this.M    = M;
+            this.ED   = ED;
+            this.raw  = raw;
         }
-        if (nx <= nmax) return 1.0;
-        double r = (nx - nmax) / nmin;  // ⚠ 명세 §5: 분모는 Nmax가 아니라 Nmin
-        return 1 - r * r;
     }
 
-    /** Eq.2 — 식이섬유: Nx<Nmin: 1-((Nx-Nmin)/Nmin)², Nx>=Nmin: 1 */
-    private static double eq2(double nx, double nmin) {
-        if (nx >= nmin) return 1.0;
-        double r = (nx - nmin) / nmin;
-        return 1 - r * r;
+    // ── 메인 진입점 ────────────────────────────────────────────────────────────
+
+    /**
+     * @param goal     "diet" 또는 "bulk"
+     * @param eer      사용자 EER (kcal/day). 객관 모드면 2000 고정으로 넘길 것
+     * @param calories kcal/100g
+     * @param protein  g/100g
+     * @param fiber    g/100g  (dietary_fiber)
+     * @param sugar    g/100g
+     * @param satFat   g/100g  (saturated_fat)
+     * @param transFat g/100g
+     * @param sodium   mg/100g
+     * @param chol     mg/100g (cholesterol)
+     */
+    public static Result calculate(String goal, double eer,
+                                   BigDecimal calories, BigDecimal protein, BigDecimal fiber,
+                                   BigDecimal sugar,    BigDecimal satFat,  BigDecimal transFat,
+                                   BigDecimal sodium,   BigDecimal chol) {
+
+        boolean isDiet = !"bulk".equalsIgnoreCase(goal);
+
+        double cal  = num(calories);
+        double prot = num(protein);
+        double fib  = num(fiber);
+        double sug  = num(sugar);
+        double sf   = num(satFat);
+        double tf   = num(transFat);
+        double na   = num(sodium);
+        double cho  = num(chol);
+
+        // Step 1 — B (유익)
+        double B = Math.min(prot / PROTEIN_MAX, 1.0)
+                + Math.min(fib  / FIBER_MAX,   1.0);
+
+        // Step 2 — L (제한)
+        double L = clipRange(sug, SUGAR_LO,  SUGAR_HI)
+                + clipRange(sf,  SATFAT_LO, SATFAT_HI)
+                + clipRange(na,  SODIUM_LO, SODIUM_HI)
+                + clipRange(cho, CHOL_LO,   CHOL_HI)
+                + clipRange(tf,  TRANS_LO,  TRANS_HI);
+
+        // Step 3 — core
+        double core = B - L;
+
+        // Step 4 — ED
+        double M;
+        if (isDiet) {
+            M = clamp(400.0 + 500.0 * (eer - EER_MIN) / (EER_MAX - EER_MIN), M_MIN, M_MAX);
+        } else {
+            M = BULK_M;
+        }
+        double ED = cal <= ED_ZERO ? 0.0 : clip((cal - ED_ZERO) / (M - ED_ZERO));
+
+        // Step 5 — raw
+        double raw = isDiet ? core - ED : core + ED;
+
+        // Step 6 — score 0~100 정규화
+        double rawLo = isDiet ? DIET_RAW_LO : BULK_RAW_LO;
+        double rawHi = isDiet ? DIET_RAW_HI : BULK_RAW_HI;
+        double score = round1(clamp((raw - rawLo) / (rawHi - rawLo) * 100.0, 0.0, 100.0));
+
+        // 건강점수 (goal 무관)
+        double health = round1(clamp(
+                (core - HEALTH_RAW_LO) / (HEALTH_RAW_HI - HEALTH_RAW_LO) * 100.0, 0.0, 100.0));
+
+        String     grade = toGrade(score, goal);
+        Breakdown  bd    = new Breakdown(B, L, core, M, ED, raw);
+
+        return new Result(score, grade, health, bd);
     }
 
-    /** Eq.3 — 콜레스테롤: Nx<Nmax: -1+((Nx-Nmax)/Nmax)², Nx>=Nmax: -1 */
-    private static double eq3(double nx, double nmax) {
-        if (nx >= nmax) return -1.0;
-        double r = (nx - nmax) / nmax;
-        return -1 + r * r;
-    }
+    // ── 등급 컷오프 §6 ────────────────────────────────────────────────────────
 
-    /** Eq.4 — 양↑나쁨: -(1/Nmax) × Nx (선형 감점, 하한 없음) */
-    private static double eq4(double nx, double nmax) {
-        return -(nx / nmax);
-    }
-
-    /** 명세 §6 잠정 등급 구간. 출시 후 분포 보고 조정. */
-    private static String toGrade(double score) {
-        if (score >=  5.0)   return "A";
-        if (score >=  2.0)   return "B";
-        if (score >= -1.0)   return "C";
-        if (score >= -4.0)   return "D";
+    public static String toGrade(double score, String goal) {
+        if ("bulk".equalsIgnoreCase(goal)) {
+            if (score >= 58.0) return "A";
+            if (score >= 45.4) return "B";
+            if (score >= 36.3) return "C";
+            if (score >= 24.7) return "D";
+            return "E";
+        }
+        // diet (기본)
+        if (score >= 74.3) return "A";
+        if (score >= 65.2) return "B";
+        if (score >= 57.8) return "C";
+        if (score >= 45.5) return "D";
         return "E";
     }
 
-    private static double asDouble(BigDecimal v) {
-        return v == null ? 0.0 : v.doubleValue();
+    // ── 내부 유틸 ──────────────────────────────────────────────────────────────
+
+    /** null → 0.0 */
+    private static double num(BigDecimal v) {
+        if (v == null) return 0.0;
+        double d = v.doubleValue();
+        return (Double.isNaN(d) || Double.isInfinite(d)) ? 0.0 : d;
+    }
+
+    /** clip((x - lo) / (hi - lo)) → [0, 1] */
+    private static double clipRange(double x, double lo, double hi) {
+        return clip((x - lo) / (hi - lo));
+    }
+
+    /** 0~1 클램프 */
+    private static double clip(double x) {
+        return Math.max(0.0, Math.min(1.0, x));
+    }
+
+    /** min~max 클램프 */
+    private static double clamp(double x, double min, double max) {
+        return Math.max(min, Math.min(max, x));
+    }
+
+    /** 소수 1자리 반올림 */
+    private static double round1(double v) {
+        return BigDecimal.valueOf(v).setScale(1, RoundingMode.HALF_UP).doubleValue();
     }
 }

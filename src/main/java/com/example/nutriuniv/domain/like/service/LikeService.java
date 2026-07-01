@@ -42,11 +42,12 @@ public class LikeService {
         Page<UserFavorite> favPage = userFavoriteRepository
                 .findByUserIdAndProductIsActiveTrue(userId, pageable);
 
-        // 등급 IN 쿼리 (N+1 방지)
+        // goal + EER 밴드 결정 후 등급 일괄 조회 (N+1 방지)
         int eerBand = pnsLookupService.resolveEerBand(userId);
+        String goal = pnsLookupService.resolveGoal(userId);
         List<Long> productIds = favPage.getContent().stream()
                 .map(fav -> fav.getProduct().getId()).collect(Collectors.toList());
-        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand, goal);
 
         List<LikePageResponse.LikeItem> items = favPage.getContent().stream()
                 .map(fav -> {
@@ -76,7 +77,6 @@ public class LikeService {
 
     @Transactional
     public void addLike(Long productId, Long userId) {
-        // 중복 찜 체크
         if (userFavoriteRepository.existsByUserIdAndProductId(userId, productId)) {
             throw new CustomException(ErrorCode.DUPLICATE_RESOURCE, "이미 찜한 상품입니다.");
         }

@@ -27,8 +27,6 @@ public class RecommendationService {
     private static final int DEFAULT_LIMIT = 20;
 
     // diet_purpose별 이상적인 영양 프로필 벡터 (10차원)
-    // 순서: calories, carbohydrate, sugar, protein, fat,
-    //       saturated_fat, trans_fat, cholesterol, sodium, dietary_fiber
     private static final Map<String, String> TARGET_VECTORS = Map.of(
             "DIET",      "[0.1,0.3,0.1,0.5,0.1,0.1,0.0,0.2,0.2,0.8]",
             "BULK",      "[0.8,0.7,0.3,0.9,0.3,0.2,0.0,0.2,0.4,0.3]",
@@ -46,12 +44,13 @@ public class RecommendationService {
 
     public RecommendationResponse getRecommendations(Long userId) {
         int eerBand = pnsLookupService.resolveEerBand(userId);
+        String goal = pnsLookupService.resolveGoal(userId);
 
         // 1단계: CF — recommendation_cache에 결과가 있으면 반환
         List<RecommendationCache> cfCache = recommendationCacheRepository
                 .findByUserIdOrderByScoreDesc(userId);
         if (!cfCache.isEmpty()) {
-            return buildCfResponse(cfCache, userId, eerBand);
+            return buildCfResponse(cfCache, userId, eerBand, goal);
         }
 
         // 2단계: 콘텐츠 기반 — diet_purpose로 영양소 벡터 유사도 추천
@@ -62,17 +61,18 @@ public class RecommendationService {
             List<Long> productIds = productVectorByDietRepository
                     .findTopProductIdsByDietPurpose(dietPurpose, targetVector, DEFAULT_LIMIT);
             if (!productIds.isEmpty()) {
-                return buildContentResponse(productIds, userId, eerBand);
+                return buildContentResponse(productIds, userId, eerBand, goal);
             }
         }
 
         // 3단계: 인기순 폴백
-        return buildPopularResponse(userId, eerBand);
+        return buildPopularResponse(userId, eerBand, goal);
     }
 
     // ── CF 응답 ───────────────────────────────────────────────────────────────────
 
-    private RecommendationResponse buildCfResponse(List<RecommendationCache> cfCache, Long userId, int eerBand) {
+    private RecommendationResponse buildCfResponse(List<RecommendationCache> cfCache,
+                                                   Long userId, int eerBand, String goal) {
         Map<Long, Double> scoreByProductId = cfCache.stream()
                 .collect(Collectors.toMap(
                         RecommendationCache::getProductId,
@@ -85,7 +85,7 @@ public class RecommendationService {
 
         List<Product> products = productRepository.findByIdInAndIsActiveTrue(productIds);
         Set<Long> favoritedIds = getFavoritedIds(userId);
-        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand, goal);
 
         Map<Long, Product> productMap = products.stream()
                 .collect(Collectors.toMap(Product::getId, p -> p));
@@ -103,10 +103,11 @@ public class RecommendationService {
 
     // ── 콘텐츠 기반 응답 ──────────────────────────────────────────────────────────
 
-    private RecommendationResponse buildContentResponse(List<Long> productIds, Long userId, int eerBand) {
+    private RecommendationResponse buildContentResponse(List<Long> productIds,
+                                                        Long userId, int eerBand, String goal) {
         List<Product> products = productRepository.findByIdInAndIsActiveTrue(productIds);
         Set<Long> favoritedIds = getFavoritedIds(userId);
-        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand, goal);
 
         Map<Long, Product> productMap = products.stream()
                 .collect(Collectors.toMap(Product::getId, p -> p));
@@ -124,12 +125,12 @@ public class RecommendationService {
 
     // ── 인기순 폴백 응답 ──────────────────────────────────────────────────────────
 
-    private RecommendationResponse buildPopularResponse(Long userId, int eerBand) {
+    private RecommendationResponse buildPopularResponse(Long userId, int eerBand, String goal) {
         List<Product> products = productRepository
                 .findTopByIsActiveTrueOrderByViewCountDesc(PageRequest.of(0, DEFAULT_LIMIT));
         Set<Long> favoritedIds = getFavoritedIds(userId);
         List<Long> productIds = products.stream().map(Product::getId).collect(Collectors.toList());
-        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand, goal);
 
         List<RecommendationItem> items = products.stream()
                 .map(p -> toItem(p, favoritedIds, null, gradeMap.get(p.getId())))
@@ -159,15 +160,15 @@ public class RecommendationService {
                 .score(score)
                 .brand(p.getBrand() != null
                         ? RecommendationResponse.BrandInfo.builder()
-                                .id(p.getBrand().getId())
-                                .name(p.getBrand().getName())
-                                .build()
+                        .id(p.getBrand().getId())
+                        .name(p.getBrand().getName())
+                        .build()
                         : null)
                 .category(p.getCategory() != null
                         ? RecommendationResponse.CategoryInfo.builder()
-                                .id(p.getCategory().getId())
-                                .name(p.getCategory().getName())
-                                .build()
+                        .id(p.getCategory().getId())
+                        .name(p.getCategory().getName())
+                        .build()
                         : null)
                 .build();
     }
