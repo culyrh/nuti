@@ -1,6 +1,5 @@
 package com.example.nutriuniv.domain.pns.service;
 
-import com.example.nutriuniv.domain.pns.calculator.MealRatioResolver;
 import com.example.nutriuniv.domain.pns.calculator.PnsCalculator;
 import com.example.nutriuniv.domain.pns.entity.ProductPnsByEer;
 import com.example.nutriuniv.domain.pns.repository.ProductPnsByEerRepository;
@@ -12,85 +11,96 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.*;
 
+/**
+ * PNS 배치 계산 서비스 — 명세 v4.1
+ *
+ * 변경점:
+ *  - goal 차원 추가 (diet / bulk) → EER 4구간 × goal 2개 = 8개 조합 저장
+ *  - 100g당 기준 컬럼(*_per_100g)으로 쿼리 교체
+ *  - MealRatioResolver 제거
+ *  - health_score 함께 저장
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PnsBatchService {
 
-    private static final int[] EER_BANDS = {1500, 2000, 2500, 3000};
+    private static final int[]    EER_BANDS = {1500, 2000, 2500, 3000};
+    private static final String[] GOALS     = {"diet", "bulk"};
 
     private final ProductPnsByEerRepository repository;
 
-    /** 모든 상품에 대해 4개 EER 구간 점수/등급/백분위를 일괄 계산 후 저장. */
     @Transactional
     public BatchResult calculateAll() {
         long startMs = System.currentTimeMillis();
 
-        // 1. 상품 + 부모 카테고리 + 영양성분 한 번에 로드
-        List<Object[]> rows = repository.fetchProductsWithParentCategory();
-        log.info("[PNS] {}개 상품 영양 데이터 로드", rows.size());
+        List<Object[]> rows = repository.fetchProductsWithNutrientsPer100g();
+        log.info("[PNS] {}개 상품 로드", rows.size());
 
         if (rows.isEmpty()) {
-            return new BatchResult(0, 0, EER_BANDS.length, 0L);
+            return new BatchResult(0, 0, EER_BANDS.length * GOALS.length, 0L);
         }
 
         int totalSaved = 0;
-        for (int band : EER_BANDS) {
-            // 기존 구간 데이터 정리
-            int deleted = repository.deleteByEerBand(band);
-            log.info("[PNS] band={} 기존 {}건 삭제", band, deleted);
 
-            // 점수 계산
-            List<ProductPnsByEer> entities = new ArrayList<>(rows.size());
-            // 카테고리별 점수 모음 (백분위 산출용)
-            Map<Long, List<ProductPnsByEer>> byParent = new HashMap<>();
+        for (String goal : GOALS) {
+            for (int band : EER_BANDS) {
 
-            for (Object[] r : rows) {
-                Long productId       = ((Number) r[0]).longValue();
-                Long parentCategory  = r[1] == null ? null : ((Number) r[1]).longValue();
-                BigDecimal carb      = (BigDecimal) r[2];
-                BigDecimal protein   = (BigDecimal) r[3];
-                BigDecimal fat       = (BigDecimal) r[4];
-                BigDecimal fiber     = (BigDecimal) r[5];
-                BigDecimal cholesterol = (BigDecimal) r[6];
-                BigDecimal satFat    = (BigDecimal) r[7];
-                BigDecimal transFat  = (BigDecimal) r[8];
-                BigDecimal sugar     = (BigDecimal) r[9];
-                BigDecimal sodium    = (BigDecimal) r[10];
+                int deleted = repository.deleteByGoalAndEerBand(goal, band);
+                log.info("[PNS] goal={} band={} 기존 {}건 삭제", goal, band, deleted);
 
-                double mealRatio = MealRatioResolver.resolve(parentCategory);
-                PnsCalculator.Result res = PnsCalculator.calculate(
-                        band, mealRatio,
-                        carb, protein, fat, fiber, cholesterol,
-                        satFat, transFat, sugar, sodium
-                );
+                List<ProductPnsByEer> entities  = new ArrayList<>(rows.size());
+                Map<Long, List<ProductPnsByEer>> byParent = new HashMap<>();
 
-                ProductPnsByEer e = ProductPnsByEer.create(productId, band, res.score, res.grade);
-                entities.add(e);
-                byParent.computeIfAbsent(parentCategory, k -> new ArrayList<>()).add(e);
-            }
+                for (Object[] r : rows) {
+                    Long productId      = ((Number) r[0]).longValue();
+                    Long parentCategory = r[1] == null ? null : ((Number) r[1]).longValue();
 
-            // 백분위 산출 (대분류별 점수 내림차순 → 상위 %)
-            for (List<ProductPnsByEer> group : byParent.values()) {
-                group.sort(Comparator.comparing(ProductPnsByEer::getScore).reversed());
-                int total = group.size();
-                for (int i = 0; i < total; i++) {
-                    double percentile = ((double) (total - i)) / total * 100.0;
-                    group.get(i).updatePercentile(percentile);
+                    BigDecimal calories = (BigDecimal) r[2];
+                    BigDecimal protein  = (BigDecimal) r[3];
+                    BigDecimal fiber    = (BigDecimal) r[4];
+                    BigDecimal sugar    = (BigDecimal) r[5];
+                    BigDecimal satFat   = (BigDecimal) r[6];
+                    BigDecimal transFat = (BigDecimal) r[7];
+                    BigDecimal sodium   = (BigDecimal) r[8];
+                    BigDecimal chol     = (BigDecimal) r[9];
+
+                    PnsCalculator.Result res = PnsCalculator.calculate(
+                            goal, band,
+                            calories, protein, fiber,
+                            sugar, satFat, transFat,
+                            sodium, chol
+                    );
+
+                    ProductPnsByEer entity = ProductPnsByEer.create(
+                            productId, band, goal,
+                            res.score, res.grade, res.healthScore
+                    );
+                    entities.add(entity);
+                    byParent.computeIfAbsent(parentCategory, k -> new ArrayList<>()).add(entity);
                 }
-            }
 
-            repository.saveAll(entities);
-            totalSaved += entities.size();
-            log.info("[PNS] band={} {}개 저장 완료", band, entities.size());
+                // 대분류별 백분위 산출
+                for (List<ProductPnsByEer> group : byParent.values()) {
+                    group.sort(Comparator.comparing(ProductPnsByEer::getScore).reversed());
+                    int total = group.size();
+                    for (int i = 0; i < total; i++) {
+                        group.get(i).updatePercentile(((double)(total - i)) / total * 100.0);
+                    }
+                }
+
+                repository.saveAll(entities);
+                totalSaved += entities.size();
+                log.info("[PNS] goal={} band={} {}건 저장", goal, band, entities.size());
+            }
         }
 
         long elapsed = System.currentTimeMillis() - startMs;
-        log.info("[PNS] 전체 완료 — 상품 {}개 × {}개 구간 = {}건 ({}ms)",
-                rows.size(), EER_BANDS.length, totalSaved, elapsed);
+        log.info("[PNS] 완료 — 상품 {}개 × {}개 조합 = {}건 ({}ms)",
+                rows.size(), EER_BANDS.length * GOALS.length, totalSaved, elapsed);
 
-        return new BatchResult(rows.size(), totalSaved, EER_BANDS.length, elapsed);
+        return new BatchResult(rows.size(), totalSaved, EER_BANDS.length * GOALS.length, elapsed);
     }
 
-    public record BatchResult(int productCount, int savedRows, int bands, long elapsedMs) {}
+    public record BatchResult(int productCount, int savedRows, int combinations, long elapsedMs) {}
 }

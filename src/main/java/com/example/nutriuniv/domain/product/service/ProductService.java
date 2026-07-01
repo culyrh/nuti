@@ -9,7 +9,6 @@ import com.example.nutriuniv.domain.category.repository.CategoryRepository;
 import com.example.nutriuniv.domain.like.repository.UserFavoriteRepository;
 import com.example.nutriuniv.domain.coupang.entity.CoupangLink;
 import com.example.nutriuniv.domain.coupang.repository.CoupangLinkRepository;
-import com.example.nutriuniv.domain.pns.calculator.MealRatioResolver;
 import com.example.nutriuniv.domain.pns.service.PnsLookupService;
 import com.example.nutriuniv.domain.user.entity.UserNutrition;
 import com.example.nutriuniv.domain.user.repository.UserNutritionRepository;
@@ -94,10 +93,11 @@ public class ProductService {
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
         Page<Product> page = productRepository.findAll(spec, pageable);
 
-        // 등급 IN 쿼리 (N+1 방지) — 유저 EER 밴드 기준으로 한 번에 조회
+        // goal + EER 밴드 결정 후 등급 일괄 조회 (N+1 방지)
         int eerBand = pnsLookupService.resolveEerBand(userId);
+        String goal = pnsLookupService.resolveGoal(userId);
         List<Long> productIds = page.getContent().stream().map(Product::getId).collect(Collectors.toList());
-        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand);
+        Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand, goal);
 
         Map<Long, Integer> priceMap = coupangLinkRepository.findByProductIdIn(productIds).stream()
                 .filter(l -> "LINKED".equals(l.getLinkStatus()))
@@ -134,16 +134,17 @@ public class ProductService {
 
         CoupangLink coupangLink = coupangLinkRepository.findByProduct(product).orElse(null);
 
+        // goal + EER 밴드 결정 후 단건 PNS 조회
         int eerBand = pnsLookupService.resolveEerBand(userId);
-        PnsLookupService.PnsLookupResult pnsResult = pnsLookupService.lookup(product.getId(), eerBand);
+        String goal = pnsLookupService.resolveGoal(userId);
+        PnsLookupService.PnsLookupResult pnsResult = pnsLookupService.lookup(product.getId(), eerBand, goal);
         ProductDetailResponse.PnsInfo pnsInfo = buildPnsInfo(product, pnsResult, eerBand);
 
         // 영양소 바 차트 기준값 — 로그인 유저는 실제 EER, 비로그인은 eerBand(2000) 사용
         double eer = resolveEer(userId, eerBand);
         Long parentCategoryId = product.getCategory().getParent() == null
                 ? null : product.getCategory().getParent().getId();
-        double mealRatio = MealRatioResolver.resolve(parentCategoryId);
-        ProductDetailResponse.NutrientBounds nutrientBounds = buildNutrientBounds(eer, mealRatio);
+        ProductDetailResponse.NutrientBounds nutrientBounds = buildNutrientBounds(eer, parentCategoryId);
 
         return toDetailResponse(product, nutrient, userId, coupangLink, pnsInfo, nutrientBounds);
     }
@@ -154,7 +155,7 @@ public class ProductService {
         if (result == null) return null;
 
         Category parent = product.getCategory().getParent();
-        Long parentId   = parent == null ? null : parent.getId();
+        Long parentId     = parent == null ? null : parent.getId();
         String parentName = parent == null ? null : parent.getName();
         int total = pnsLookupService.countActiveByParentCategory(parentId);
 
@@ -183,8 +184,10 @@ public class ProductService {
                 .orElse((double) eerBand);
     }
 
-    /** 명세서 §8 — 영양소별 바 차트 좌/우 기준값 계산. */
-    private ProductDetailResponse.NutrientBounds buildNutrientBounds(double eer, double mealRatio) {
+    /** 영양소 바 차트 기준값 계산 — NutrientBounds */
+    private ProductDetailResponse.NutrientBounds buildNutrientBounds(double eer, Long parentCategoryId) {
+        // mealRatio: 대분류 카테고리 무관, 고정값 0.3 (MealRatioResolver 제거)
+        double mealRatio = 0.3;
         return ProductDetailResponse.NutrientBounds.builder()
                 .eerUsed(eer)
                 .mealRatio(mealRatio)
@@ -287,7 +290,6 @@ public class ProductService {
 
     @Transactional
     public void resetAll() {
-
         entityManager.createNativeQuery("TRUNCATE TABLE user_favorites RESTART IDENTITY CASCADE").executeUpdate();
         entityManager.createNativeQuery("TRUNCATE TABLE review_images RESTART IDENTITY CASCADE").executeUpdate();
         entityManager.createNativeQuery("TRUNCATE TABLE reviews RESTART IDENTITY CASCADE").executeUpdate();
