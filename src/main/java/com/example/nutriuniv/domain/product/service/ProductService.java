@@ -100,7 +100,7 @@ public class ProductService {
             // nutrientClaims 필터가 있으면 JPA spec으로 ID 목록 먼저 추출
             List<Long> claimFilteredIds = null;
             if (!claims.isEmpty()) {
-                claimFilteredIds = productRepository.findAll(spec, Pageable.unpaged())
+                claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
                         .stream().map(Product::getId).collect(Collectors.toList());
             }
             page = findAllOrderByPnsScore(request, eerBand, goal, userId != null, claimFilteredIds);
@@ -334,28 +334,22 @@ public class ProductService {
         StringBuilder where = new StringBuilder("WHERE p.is_active = TRUE ");
         java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
 
-        // nutrientClaims 필터 결과 ID 목록
+        // 카테고리/브랜드/nutrientClaims 필터 결과 ID 목록
+        // Long[] named parameter → PostgreSQL bigint[] 자동변환 안 됨 → ID를 직접 IN절에 삽입 (SQL injection 안전: Long 타입)
         if (claimFilteredIds != null) {
             if (claimFilteredIds.isEmpty()) {
-                // 조건에 맞는 상품이 없으면 빈 결과 반환
                 return new org.springframework.data.domain.PageImpl<>(
                         List.of(), PageRequest.of(page, size), 0);
             }
-            where.append("AND p.id = ANY(:claimIds) ");
-            params.put("claimIds", claimFilteredIds.toArray(new Long[0]));
+            String idList = claimFilteredIds.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(","));
+            where.append("AND p.id IN (").append(idList).append(") ");
         }
 
         if (request.getKeyword() != null && !request.getKeyword().isBlank()) {
             where.append("AND p.name ILIKE :keyword ");
             params.put("keyword", "%" + request.getKeyword() + "%");
-        }
-        if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
-            where.append("AND p.category_id = ANY(:categoryIds) ");
-            params.put("categoryIds", request.getCategoryIds().toArray(new Long[0]));
-        }
-        if (request.getBrandIds() != null && !request.getBrandIds().isEmpty()) {
-            where.append("AND p.brand_id = ANY(:brandIds) ");
-            params.put("brandIds", request.getBrandIds().toArray(new Long[0]));
         }
         if (request.getMinCalories() != null) {
             where.append("AND pn.calories >= :minCalories ");
