@@ -350,12 +350,12 @@ public class ProductService {
             params.put("keyword", "%" + request.getKeyword() + "%");
         }
         if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
-            where.append("AND p.category_id IN (:categoryIds) ");
-            params.put("categoryIds", request.getCategoryIds());
+            where.append("AND p.category_id = ANY(:categoryIds) ");
+            params.put("categoryIds", request.getCategoryIds().toArray(new Long[0]));
         }
         if (request.getBrandIds() != null && !request.getBrandIds().isEmpty()) {
-            where.append("AND p.brand_id IN (:brandIds) ");
-            params.put("brandIds", request.getBrandIds());
+            where.append("AND p.brand_id = ANY(:brandIds) ");
+            params.put("brandIds", request.getBrandIds().toArray(new Long[0]));
         }
         if (request.getMinCalories() != null) {
             where.append("AND pn.calories >= :minCalories ");
