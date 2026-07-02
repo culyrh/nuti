@@ -97,9 +97,13 @@ public class ProductService {
         // SCORE 정렬은 pns score 기준 네이티브 쿼리, 나머지는 JPA 정렬
         Page<Product> page;
         if ("SCORE".equals(request.getSort())) {
-            // nutrientClaims 필터가 있으면 JPA spec으로 ID 목록 먼저 추출
+            // 카테고리/브랜드/nutrientClaims 필터가 있으면 JPA spec으로 ID 목록 추출
+            // (카테고리는 하위 카테고리까지 포함하는 서브쿼리 로직이 있어서 JPA spec으로 처리해야 함)
             List<Long> claimFilteredIds = null;
-            if (!claims.isEmpty()) {
+            boolean hasFilter = (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty())
+                    || (request.getBrandIds() != null && !request.getBrandIds().isEmpty())
+                    || !claims.isEmpty();
+            if (hasFilter) {
                 claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
                         .stream().map(Product::getId).collect(Collectors.toList());
             }
