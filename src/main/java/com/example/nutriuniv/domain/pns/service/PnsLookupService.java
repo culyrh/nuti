@@ -19,7 +19,7 @@ import java.util.Objects;
 public class PnsLookupService {
 
     public static final int    DEFAULT_EER_BAND = 2000;
-    public static final String DEFAULT_GOAL     = "diet";
+    public static final String DEFAULT_GOAL     = "health"; // 비로그인 기본값: health
 
     private final UserNutritionRepository   userNutritionRepository;
     private final ProductPnsByEerRepository pnsRepository;
@@ -38,7 +38,7 @@ public class PnsLookupService {
      * 사용자의 diet_purpose를 PNS goal로 변환.
      *  - "벌크업" → "bulk"
      *  - 그 외(다이어트 등) → "diet"
-     *  - 비로그인 / 미입력 → "diet"
+     *  - 비로그인 / 미입력 → "health"
      */
     @Transactional(readOnly = true)
     public String resolveGoal(Long userId) {
@@ -51,7 +51,9 @@ public class PnsLookupService {
 
     @Transactional(readOnly = true)
     public PnsLookupResult lookup(Long productId, int eerBand, String goal) {
-        ProductPnsByEer pns = pnsRepository.findOneByProductIdAndEerBandAndGoal(productId, eerBand, goal);
+        // health goal은 항상 HEALTH_BAND(2000) 사용
+        int lookupBand = "health".equals(goal) ? 2000 : eerBand;
+        ProductPnsByEer pns = pnsRepository.findOneByProductIdAndEerBandAndGoal(productId, lookupBand, goal);
         if (pns == null) return null;
 
         BigDecimal percentile = pns.getPercentile();
@@ -66,21 +68,22 @@ public class PnsLookupService {
                 pns.getHealthScore(),
                 percentile,
                 topPercent,
-                eerBand,
+                lookupBand,
                 goal
         );
     }
 
     @Transactional(readOnly = true)
     public Map<Long, String> lookupGrades(List<Long> productIds, int eerBand, String goal) {
-        return pnsRepository.findGradesByProductIdsAndEerBandAndGoal(productIds, eerBand, goal);
+        // health goal은 항상 HEALTH_BAND(2000) 사용
+        int lookupBand = "health".equals(goal) ? 2000 : eerBand;
+        return pnsRepository.findGradesByProductIdsAndEerBandAndGoal(productIds, lookupBand, goal);
     }
 
     @Transactional(readOnly = true)
     public int countActiveByParentCategory(Long parentCategoryId) {
         if (parentCategoryId == null) return 0;
 
-        // Native query positional parameter 사용
         String sql = """
                 SELECT COUNT(*)
                 FROM   products p

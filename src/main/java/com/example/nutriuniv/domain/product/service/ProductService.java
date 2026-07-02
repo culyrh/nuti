@@ -432,8 +432,11 @@ public class ProductService {
             params.put("eerBand", eerBand);
             params.put("goal", goal);
         } else {
-            pnsJoin = "";
-            orderBy = "ORDER BY p.nutrition_score DESC NULLS LAST ";
+            // 비로그인: health goal 기준 pns.score로 정렬 (등급 기준과 일치)
+            pnsJoin = "JOIN product_pns_by_eer pns ON p.id = pns.product_id AND pns.eer_band = :eerBand AND pns.goal = :goal ";
+            orderBy = "ORDER BY pns.score DESC NULLS LAST ";
+            params.put("eerBand", eerBand);
+            params.put("goal", goal);
         }
 
         String sql = "SELECT p.* FROM products p " + pnsJoin + nutrientJoin + where + orderBy
