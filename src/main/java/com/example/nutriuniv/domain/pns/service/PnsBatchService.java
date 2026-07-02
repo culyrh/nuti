@@ -14,19 +14,20 @@ import java.util.*;
 /**
  * PNS 배치 계산 서비스 — 명세 v4.1
  *
- * 변경점:
- *  - goal 차원 추가 (diet / bulk) → EER 4구간 × goal 2개 = 8개 조합 저장
- *  - 100g당 기준 컬럼(*_per_100g)으로 쿼리 교체
- *  - MealRatioResolver 제거
- *  - health_score 함께 저장
+ * goal:
+ *  - diet  × EER 4구간 = 4개 조합
+ *  - bulk  × EER 4구간 = 4개 조합
+ *  - health × EER 1구간(2000 고정) = 1개 조합 (EER 무관, health_score 기준)
+ * 총 9개 조합 저장
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PnsBatchService {
 
-    private static final int[]    EER_BANDS = {1500, 2000, 2500, 3000};
-    private static final String[] GOALS     = {"diet", "bulk"};
+    private static final int[]    EER_BANDS   = {1500, 2000, 2500, 3000};
+    private static final String[] DIET_BULK   = {"diet", "bulk"};
+    private static final int      HEALTH_BAND = 2000; // health는 EER 무관, 대표값으로 저장
 
     private final ProductPnsByEerRepository repository;
 
@@ -38,18 +39,19 @@ public class PnsBatchService {
         log.info("[PNS] {}개 상품 로드", rows.size());
 
         if (rows.isEmpty()) {
-            return new BatchResult(0, 0, EER_BANDS.length * GOALS.length, 0L);
+            return new BatchResult(0, 0, 0, 0L);
         }
 
         int totalSaved = 0;
 
-        for (String goal : GOALS) {
+        // ── diet / bulk × 4구간 ───────────────────────────────────────────────
+        for (String goal : DIET_BULK) {
             for (int band : EER_BANDS) {
 
                 int deleted = repository.deleteByGoalAndEerBand(goal, band);
                 log.info("[PNS] goal={} band={} 기존 {}건 삭제", goal, band, deleted);
 
-                List<ProductPnsByEer> entities  = new ArrayList<>(rows.size());
+                List<ProductPnsByEer> entities = new ArrayList<>(rows.size());
                 Map<Long, List<ProductPnsByEer>> byParent = new HashMap<>();
 
                 for (Object[] r : rows) {
@@ -95,11 +97,61 @@ public class PnsBatchService {
             }
         }
 
-        long elapsed = System.currentTimeMillis() - startMs;
-        log.info("[PNS] 완료 — 상품 {}개 × {}개 조합 = {}건 ({}ms)",
-                rows.size(), EER_BANDS.length * GOALS.length, totalSaved, elapsed);
+        // ── health × 1구간(2000 고정) ─────────────────────────────────────────
+        int deleted = repository.deleteByGoalAndEerBand("health", HEALTH_BAND);
+        log.info("[PNS] goal=health band={} 기존 {}건 삭제", HEALTH_BAND, deleted);
 
-        return new BatchResult(rows.size(), totalSaved, EER_BANDS.length * GOALS.length, elapsed);
+        List<ProductPnsByEer> healthEntities = new ArrayList<>(rows.size());
+        Map<Long, List<ProductPnsByEer>> byParentHealth = new HashMap<>();
+
+        for (Object[] r : rows) {
+            Long productId      = ((Number) r[0]).longValue();
+            Long parentCategory = r[1] == null ? null : ((Number) r[1]).longValue();
+
+            BigDecimal calories = (BigDecimal) r[2];
+            BigDecimal protein  = (BigDecimal) r[3];
+            BigDecimal fiber    = (BigDecimal) r[4];
+            BigDecimal sugar    = (BigDecimal) r[5];
+            BigDecimal satFat   = (BigDecimal) r[6];
+            BigDecimal transFat = (BigDecimal) r[7];
+            BigDecimal sodium   = (BigDecimal) r[8];
+            BigDecimal chol     = (BigDecimal) r[9];
+
+            // health는 goal/EER 무관 — diet 2000으로 계산 후 healthScore/healthGrade만 사용
+            PnsCalculator.Result res = PnsCalculator.calculate(
+                    "diet", HEALTH_BAND,
+                    calories, protein, fiber,
+                    sugar, satFat, transFat,
+                    sodium, chol
+            );
+
+            String healthGrade = PnsCalculator.toHealthGrade(res.healthScore);
+
+            ProductPnsByEer entity = ProductPnsByEer.create(
+                    productId, HEALTH_BAND, "health",
+                    res.healthScore, healthGrade, res.healthScore
+            );
+            healthEntities.add(entity);
+            byParentHealth.computeIfAbsent(parentCategory, k -> new ArrayList<>()).add(entity);
+        }
+
+        // 대분류별 백분위 산출
+        for (List<ProductPnsByEer> group : byParentHealth.values()) {
+            group.sort(Comparator.comparing(ProductPnsByEer::getScore).reversed());
+            int total = group.size();
+            for (int i = 0; i < total; i++) {
+                group.get(i).updatePercentile(((double)(total - i)) / total * 100.0);
+            }
+        }
+
+        repository.saveAll(healthEntities);
+        totalSaved += healthEntities.size();
+        log.info("[PNS] goal=health band={} {}건 저장", HEALTH_BAND, healthEntities.size());
+
+        long elapsed = System.currentTimeMillis() - startMs;
+        log.info("[PNS] 완료 — 상품 {}개 × 9개 조합 = {}건 ({}ms)", rows.size(), totalSaved, elapsed);
+
+        return new BatchResult(rows.size(), totalSaved, 9, elapsed);
     }
 
     public record BatchResult(int productCount, int savedRows, int combinations, long elapsedMs) {}

@@ -174,6 +174,16 @@ public final class PnsCalculator {
         return "E";
     }
 
+    // ── 건강 등급 컷오프 §6 ──────────────────────────────────────────────────────
+
+    public static String toHealthGrade(double healthScore) {
+        if (healthScore >= 64.0) return "A";
+        if (healthScore >= 55.0) return "B";
+        if (healthScore >= 45.3) return "C";
+        if (healthScore >= 37.1) return "D";
+        return "E";
+    }
+
     // ── 내부 유틸 ──────────────────────────────────────────────────────────────
 
     /** null → 0.0 */
