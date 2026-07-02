@@ -90,12 +90,18 @@ public class ProductService {
             spec = spec.and(NutrientClaimSpecification.hasClaims(claims));
         }
 
-        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
-        Page<Product> page = productRepository.findAll(spec, pageable);
-
-        // goal + EER 밴드 결정 후 등급 일괄 조회 (N+1 방지)
+        // goal + EER 밴드 결정
         int eerBand = pnsLookupService.resolveEerBand(userId);
         String goal = pnsLookupService.resolveGoal(userId);
+
+        // SCORE 정렬은 pns score 기준 네이티브 쿼리, 나머지는 JPA 정렬
+        Page<Product> page;
+        if ("SCORE".equals(request.getSort())) {
+            page = findAllOrderByPnsScore(request.getPage(), request.getSize(), eerBand, goal, userId != null);
+        } else {
+            Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
+            page = productRepository.findAll(spec, pageable);
+        }
         List<Long> productIds = page.getContent().stream().map(Product::getId).collect(Collectors.toList());
         Map<Long, String> gradeMap = pnsLookupService.lookupGrades(productIds, eerBand, goal);
 
@@ -302,6 +308,63 @@ public class ProductService {
         entityManager.createNativeQuery("DELETE FROM categories WHERE depth = 2").executeUpdate();
         entityManager.createNativeQuery("DELETE FROM categories WHERE depth = 1").executeUpdate();
         entityManager.createNativeQuery("ALTER SEQUENCE categories_id_seq RESTART WITH 1").executeUpdate();
+    }
+
+    // ── SCORE 정렬 전용 쿼리 ──────────────────────────────────────────────────────
+
+    /**
+     * 비로그인 → products.nutrition_score(health_score) 기준 정렬
+     * 로그인   → product_pns_by_eer.score JOIN 후 사용자 goal 기준 정렬
+     */
+    @SuppressWarnings("unchecked")
+    private Page<Product> findAllOrderByPnsScore(int page, int size, int eerBand, String goal, boolean isLoggedIn) {
+        if (!isLoggedIn) {
+            String sql = """
+                    SELECT * FROM products
+                    WHERE is_active = TRUE
+                    ORDER BY nutrition_score DESC NULLS LAST
+                    LIMIT ?1 OFFSET ?2
+                    """;
+            String countSql = "SELECT COUNT(*) FROM products WHERE is_active = TRUE";
+
+            List<Product> content = entityManager.createNativeQuery(sql, Product.class)
+                    .setParameter(1, size)
+                    .setParameter(2, (long) page * size)
+                    .getResultList();
+            Number total = (Number) entityManager.createNativeQuery(countSql).getSingleResult();
+            return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
+        }
+
+        String sql = """
+                SELECT p.* FROM products p
+                JOIN product_pns_by_eer pns
+                  ON p.id = pns.product_id
+                 AND pns.eer_band = ?1
+                 AND pns.goal = ?2
+                WHERE p.is_active = TRUE
+                ORDER BY pns.score DESC NULLS LAST
+                LIMIT ?3 OFFSET ?4
+                """;
+        String countSql = """
+                SELECT COUNT(*) FROM products p
+                JOIN product_pns_by_eer pns
+                  ON p.id = pns.product_id
+                 AND pns.eer_band = ?1
+                 AND pns.goal = ?2
+                WHERE p.is_active = TRUE
+                """;
+
+        List<Product> content = entityManager.createNativeQuery(sql, Product.class)
+                .setParameter(1, eerBand)
+                .setParameter(2, goal)
+                .setParameter(3, size)
+                .setParameter(4, (long) page * size)
+                .getResultList();
+        Number total = (Number) entityManager.createNativeQuery(countSql)
+                .setParameter(1, eerBand)
+                .setParameter(2, goal)
+                .getSingleResult();
+        return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
     }
 
     // ── 헬퍼 ─────────────────────────────────────────────────────────────────────
