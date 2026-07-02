@@ -97,7 +97,13 @@ public class ProductService {
         // SCORE 정렬은 pns score 기준 네이티브 쿼리, 나머지는 JPA 정렬
         Page<Product> page;
         if ("SCORE".equals(request.getSort())) {
-            page = findAllOrderByPnsScore(request.getPage(), request.getSize(), eerBand, goal, userId != null);
+            // nutrientClaims 필터가 있으면 JPA spec으로 ID 목록 먼저 추출
+            List<Long> claimFilteredIds = null;
+            if (!claims.isEmpty()) {
+                claimFilteredIds = productRepository.findAll(spec, Pageable.unpaged())
+                        .stream().map(Product::getId).collect(Collectors.toList());
+            }
+            page = findAllOrderByPnsScore(request, eerBand, goal, userId != null, claimFilteredIds);
         } else {
             Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
             page = productRepository.findAll(spec, pageable);
@@ -313,57 +319,143 @@ public class ProductService {
     // ── SCORE 정렬 전용 쿼리 ──────────────────────────────────────────────────────
 
     /**
-     * 비로그인 → products.nutrition_score(health_score) 기준 정렬
+     * 비로그인 → nutrition_score(health_score) 기준 정렬
      * 로그인   → product_pns_by_eer.score JOIN 후 사용자 goal 기준 정렬
+     * 필터 조건(카테고리/브랜드/영양소 등)은 동적 WHERE절로 처리
      */
     @SuppressWarnings("unchecked")
-    private Page<Product> findAllOrderByPnsScore(int page, int size, int eerBand, String goal, boolean isLoggedIn) {
-        if (!isLoggedIn) {
-            String sql = """
-                    SELECT * FROM products
-                    WHERE is_active = TRUE
-                    ORDER BY nutrition_score DESC NULLS LAST
-                    LIMIT ?1 OFFSET ?2
-                    """;
-            String countSql = "SELECT COUNT(*) FROM products WHERE is_active = TRUE";
+    private Page<Product> findAllOrderByPnsScore(ProductSearchRequest request,
+                                                 int eerBand, String goal, boolean isLoggedIn,
+                                                 List<Long> claimFilteredIds) {
+        int page = request.getPage();
+        int size = request.getSize();
 
-            List<Product> content = entityManager.createNativeQuery(sql, Product.class)
-                    .setParameter(1, size)
-                    .setParameter(2, (long) page * size)
-                    .getResultList();
-            Number total = (Number) entityManager.createNativeQuery(countSql).getSingleResult();
-            return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
+        // 동적 WHERE 조건 조립
+        StringBuilder where = new StringBuilder("WHERE p.is_active = TRUE ");
+        java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
+
+        // nutrientClaims 필터 결과 ID 목록
+        if (claimFilteredIds != null) {
+            if (claimFilteredIds.isEmpty()) {
+                // 조건에 맞는 상품이 없으면 빈 결과 반환
+                return new org.springframework.data.domain.PageImpl<>(
+                        List.of(), PageRequest.of(page, size), 0);
+            }
+            where.append("AND p.id = ANY(:claimIds) ");
+            params.put("claimIds", claimFilteredIds.toArray(new Long[0]));
         }
 
-        String sql = """
-                SELECT p.* FROM products p
-                JOIN product_pns_by_eer pns
-                  ON p.id = pns.product_id
-                 AND pns.eer_band = ?1
-                 AND pns.goal = ?2
-                WHERE p.is_active = TRUE
-                ORDER BY pns.score DESC NULLS LAST
-                LIMIT ?3 OFFSET ?4
-                """;
-        String countSql = """
-                SELECT COUNT(*) FROM products p
-                JOIN product_pns_by_eer pns
-                  ON p.id = pns.product_id
-                 AND pns.eer_band = ?1
-                 AND pns.goal = ?2
-                WHERE p.is_active = TRUE
-                """;
+        if (request.getKeyword() != null && !request.getKeyword().isBlank()) {
+            where.append("AND p.name ILIKE :keyword ");
+            params.put("keyword", "%" + request.getKeyword() + "%");
+        }
+        if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
+            where.append("AND p.category_id IN (:categoryIds) ");
+            params.put("categoryIds", request.getCategoryIds());
+        }
+        if (request.getBrandIds() != null && !request.getBrandIds().isEmpty()) {
+            where.append("AND p.brand_id IN (:brandIds) ");
+            params.put("brandIds", request.getBrandIds());
+        }
+        if (request.getMinCalories() != null) {
+            where.append("AND pn.calories >= :minCalories ");
+            params.put("minCalories", request.getMinCalories());
+        }
+        if (request.getMaxCalories() != null) {
+            where.append("AND pn.calories <= :maxCalories ");
+            params.put("maxCalories", request.getMaxCalories());
+        }
+        if (request.getMinProtein() != null) {
+            where.append("AND pn.protein >= :minProtein ");
+            params.put("minProtein", request.getMinProtein());
+        }
+        if (request.getMaxProtein() != null) {
+            where.append("AND pn.protein <= :maxProtein ");
+            params.put("maxProtein", request.getMaxProtein());
+        }
+        if (request.getMinFat() != null) {
+            where.append("AND pn.fat >= :minFat ");
+            params.put("minFat", request.getMinFat());
+        }
+        if (request.getMaxFat() != null) {
+            where.append("AND pn.fat <= :maxFat ");
+            params.put("maxFat", request.getMaxFat());
+        }
+        if (request.getMinCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate >= :minCarbohydrate ");
+            params.put("minCarbohydrate", request.getMinCarbohydrate());
+        }
+        if (request.getMaxCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate <= :maxCarbohydrate ");
+            params.put("maxCarbohydrate", request.getMaxCarbohydrate());
+        }
+        if (request.getMinSugar() != null) {
+            where.append("AND pn.sugar >= :minSugar ");
+            params.put("minSugar", request.getMinSugar());
+        }
+        if (request.getMaxSugar() != null) {
+            where.append("AND pn.sugar <= :maxSugar ");
+            params.put("maxSugar", request.getMaxSugar());
+        }
+        if (request.getMinSodium() != null) {
+            where.append("AND pn.sodium >= :minSodium ");
+            params.put("minSodium", request.getMinSodium());
+        }
+        if (request.getMaxSodium() != null) {
+            where.append("AND pn.sodium <= :maxSodium ");
+            params.put("maxSodium", request.getMaxSodium());
+        }
+        if (request.getMinNutritionScore() != null) {
+            where.append("AND p.nutrition_score >= :minNutritionScore ");
+            params.put("minNutritionScore", request.getMinNutritionScore());
+        }
+        if (request.getMaxNutritionScore() != null) {
+            where.append("AND p.nutrition_score <= :maxNutritionScore ");
+            params.put("maxNutritionScore", request.getMaxNutritionScore());
+        }
 
-        List<Product> content = entityManager.createNativeQuery(sql, Product.class)
-                .setParameter(1, eerBand)
-                .setParameter(2, goal)
-                .setParameter(3, size)
-                .setParameter(4, (long) page * size)
-                .getResultList();
-        Number total = (Number) entityManager.createNativeQuery(countSql)
-                .setParameter(1, eerBand)
-                .setParameter(2, goal)
-                .getSingleResult();
+        // 영양소 조인 필요 여부
+        boolean needNutrientJoin = request.getMinCalories() != null || request.getMaxCalories() != null
+                || request.getMinProtein() != null || request.getMaxProtein() != null
+                || request.getMinFat() != null || request.getMaxFat() != null
+                || request.getMinCarbohydrate() != null || request.getMaxCarbohydrate() != null
+                || request.getMinSugar() != null || request.getMaxSugar() != null
+                || request.getMinSodium() != null || request.getMaxSodium() != null;
+
+        String nutrientJoin = needNutrientJoin
+                ? "JOIN product_nutrients pn ON p.id = pn.product_id "
+                : "";
+
+        String orderBy;
+        String pnsJoin;
+        if (isLoggedIn) {
+            pnsJoin = "JOIN product_pns_by_eer pns ON p.id = pns.product_id AND pns.eer_band = :eerBand AND pns.goal = :goal ";
+            orderBy = "ORDER BY pns.score DESC NULLS LAST ";
+            params.put("eerBand", eerBand);
+            params.put("goal", goal);
+        } else {
+            pnsJoin = "";
+            orderBy = "ORDER BY p.nutrition_score DESC NULLS LAST ";
+        }
+
+        String sql = "SELECT p.* FROM products p " + pnsJoin + nutrientJoin + where + orderBy
+                + "LIMIT :limit OFFSET :offset";
+        String countSql = "SELECT COUNT(*) FROM products p " + pnsJoin + nutrientJoin + where;
+
+        params.put("limit", size);
+        params.put("offset", (long) page * size);
+
+        var query = entityManager.createNativeQuery(sql, Product.class);
+        var countQuery = entityManager.createNativeQuery(countSql);
+        params.forEach((k, v) -> {
+            if (!k.equals("limit") && !k.equals("offset")) {
+                countQuery.setParameter(k, v);
+            }
+            query.setParameter(k, v);
+        });
+
+        List<Product> content = query.getResultList();
+        Number total = (Number) countQuery.getSingleResult();
         return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
     }
 
