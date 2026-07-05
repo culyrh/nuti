@@ -10,6 +10,9 @@ import com.example.nutriuniv.domain.like.repository.UserFavoriteRepository;
 import com.example.nutriuniv.domain.coupang.entity.CoupangLink;
 import com.example.nutriuniv.domain.coupang.repository.CoupangLinkRepository;
 import com.example.nutriuniv.domain.pns.service.PnsLookupService;
+import com.example.nutriuniv.domain.recommendation.repository.ProductVectorByDietRepository;
+import com.example.nutriuniv.domain.recommendation.repository.RecommendationCacheRepository;
+import com.example.nutriuniv.domain.recommendation.service.RecommendationService;
 import com.example.nutriuniv.domain.user.entity.UserNutrition;
 import com.example.nutriuniv.domain.user.repository.UserNutritionRepository;
 import com.example.nutriuniv.domain.product.dto.*;
@@ -52,6 +55,9 @@ public class ProductService {
     private final CoupangLinkRepository coupangLinkRepository;
     private final PnsLookupService pnsLookupService;
     private final UserNutritionRepository userNutritionRepository;
+    private final RecommendationCacheRepository recommendationCacheRepository;
+    private final ProductVectorByDietRepository productVectorByDietRepository;
+    private final RecommendationService recommendationService;
 
     // ── 일반 유저: 상품 목록 조회 ─────────────────────────────────────────────────
 
@@ -94,20 +100,39 @@ public class ProductService {
         int eerBand = pnsLookupService.resolveEerBand(userId);
         String goal = pnsLookupService.resolveGoal(userId);
 
-        // SCORE 정렬은 pns score 기준 네이티브 쿼리, 나머지는 JPA 정렬
+        // SCORE/ACCURACY(키워드 있을 때)/RECOMMENDED(로그인 시) 정렬은 네이티브 쿼리, 나머지는 JPA 정렬
+        boolean hasKeyword = request.getKeyword() != null && !request.getKeyword().isBlank();
+        boolean hasFilter = (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty())
+                || (request.getBrandIds() != null && !request.getBrandIds().isEmpty())
+                || !claims.isEmpty();
+
         Page<Product> page;
         if ("SCORE".equals(request.getSort())) {
             // 카테고리/브랜드/nutrientClaims 필터가 있으면 JPA spec으로 ID 목록 추출
             // (카테고리는 하위 카테고리까지 포함하는 서브쿼리 로직이 있어서 JPA spec으로 처리해야 함)
             List<Long> claimFilteredIds = null;
-            boolean hasFilter = (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty())
-                    || (request.getBrandIds() != null && !request.getBrandIds().isEmpty())
-                    || !claims.isEmpty();
             if (hasFilter) {
                 claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
                         .stream().map(Product::getId).collect(Collectors.toList());
             }
             page = findAllOrderByPnsScore(request, eerBand, goal, userId != null, claimFilteredIds);
+        } else if ("ACCURACY".equals(request.getSort()) && hasKeyword) {
+            // 정확도순: 키워드가 있을 때만 트라이그램 유사도 정렬. 키워드 없으면 아래 else로 폴백(최신순).
+            List<Long> claimFilteredIds = null;
+            if (hasFilter) {
+                claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
+                        .stream().map(Product::getId).collect(Collectors.toList());
+            }
+            page = findAllOrderByRelevance(request, claimFilteredIds);
+        } else if ("RECOMMENDED".equals(request.getSort()) && userId != null) {
+            // 추천순: 로그인 유저만 개인화. 새 테이블 없이 recommendation_cache(CF)/product_vectors_by_diet(CONTENT) 재사용,
+            // 둘 다 신호 없으면 인기순으로 자연 폴백(findAllOrderByPreference 내부에서 처리).
+            List<Long> claimFilteredIds = null;
+            if (hasFilter) {
+                claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
+                        .stream().map(Product::getId).collect(Collectors.toList());
+            }
+            page = findAllOrderByPreference(request, userId, claimFilteredIds);
         } else {
             Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
             page = productRepository.findAll(spec, pageable);
@@ -460,6 +485,276 @@ public class ProductService {
         return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
     }
 
+    // ── ACCURACY 정렬 전용 쿼리 ────────────────────────────────────────────────────
+
+    /**
+     * 정확도순(ACCURACY) 정렬 — PostgreSQL pg_trgm 기반 상품명 트라이그램 유사도로 정렬.
+     * 호출부에서 키워드가 있을 때만 이 메서드를 호출하도록 보장함.
+     */
+    @SuppressWarnings("unchecked")
+    private Page<Product> findAllOrderByRelevance(ProductSearchRequest request,
+                                                  List<Long> claimFilteredIds) {
+        int page = request.getPage();
+        int size = request.getSize();
+
+        StringBuilder where = new StringBuilder("WHERE p.is_active = TRUE ");
+        java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
+
+        if (claimFilteredIds != null) {
+            if (claimFilteredIds.isEmpty()) {
+                return new org.springframework.data.domain.PageImpl<>(
+                        List.of(), PageRequest.of(page, size), 0);
+            }
+            String idList = claimFilteredIds.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(","));
+            where.append("AND p.id IN (").append(idList).append(") ");
+        }
+
+        params.put("keyword", request.getKeyword());
+
+        if (request.getMinCalories() != null) {
+            where.append("AND pn.calories >= :minCalories ");
+            params.put("minCalories", request.getMinCalories());
+        }
+        if (request.getMaxCalories() != null) {
+            where.append("AND pn.calories <= :maxCalories ");
+            params.put("maxCalories", request.getMaxCalories());
+        }
+        if (request.getMinProtein() != null) {
+            where.append("AND pn.protein >= :minProtein ");
+            params.put("minProtein", request.getMinProtein());
+        }
+        if (request.getMaxProtein() != null) {
+            where.append("AND pn.protein <= :maxProtein ");
+            params.put("maxProtein", request.getMaxProtein());
+        }
+        if (request.getMinFat() != null) {
+            where.append("AND pn.fat >= :minFat ");
+            params.put("minFat", request.getMinFat());
+        }
+        if (request.getMaxFat() != null) {
+            where.append("AND pn.fat <= :maxFat ");
+            params.put("maxFat", request.getMaxFat());
+        }
+        if (request.getMinCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate >= :minCarbohydrate ");
+            params.put("minCarbohydrate", request.getMinCarbohydrate());
+        }
+        if (request.getMaxCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate <= :maxCarbohydrate ");
+            params.put("maxCarbohydrate", request.getMaxCarbohydrate());
+        }
+        if (request.getMinSugar() != null) {
+            where.append("AND pn.sugar >= :minSugar ");
+            params.put("minSugar", request.getMinSugar());
+        }
+        if (request.getMaxSugar() != null) {
+            where.append("AND pn.sugar <= :maxSugar ");
+            params.put("maxSugar", request.getMaxSugar());
+        }
+        if (request.getMinSodium() != null) {
+            where.append("AND pn.sodium >= :minSodium ");
+            params.put("minSodium", request.getMinSodium());
+        }
+        if (request.getMaxSodium() != null) {
+            where.append("AND pn.sodium <= :maxSodium ");
+            params.put("maxSodium", request.getMaxSodium());
+        }
+        if (request.getMinNutritionScore() != null) {
+            where.append("AND p.nutrition_score >= :minNutritionScore ");
+            params.put("minNutritionScore", request.getMinNutritionScore());
+        }
+        if (request.getMaxNutritionScore() != null) {
+            where.append("AND p.nutrition_score <= :maxNutritionScore ");
+            params.put("maxNutritionScore", request.getMaxNutritionScore());
+        }
+
+        boolean needNutrientJoin = request.getMinCalories() != null || request.getMaxCalories() != null
+                || request.getMinProtein() != null || request.getMaxProtein() != null
+                || request.getMinFat() != null || request.getMaxFat() != null
+                || request.getMinCarbohydrate() != null || request.getMaxCarbohydrate() != null
+                || request.getMinSugar() != null || request.getMaxSugar() != null
+                || request.getMinSodium() != null || request.getMaxSodium() != null;
+
+        String nutrientJoin = needNutrientJoin
+                ? "JOIN product_nutrients pn ON p.id = pn.product_id "
+                : "";
+
+        // similarity(name, keyword): pg_trgm 트라이그램 유사도(0~1), 높을수록 관련도 높음
+        String sql = "SELECT p.* FROM products p " + nutrientJoin + where
+                + "ORDER BY similarity(p.name, :keyword) DESC, p.created_at DESC "
+                + "LIMIT :limit OFFSET :offset";
+        String countSql = "SELECT COUNT(*) FROM products p " + nutrientJoin + where;
+
+        params.put("limit", size);
+        params.put("offset", (long) page * size);
+
+        var query = entityManager.createNativeQuery(sql, Product.class);
+        var countQuery = entityManager.createNativeQuery(countSql);
+        params.forEach((k, v) -> {
+            if (!k.equals("limit") && !k.equals("offset")) {
+                countQuery.setParameter(k, v);
+            }
+            query.setParameter(k, v);
+        });
+
+        List<Product> content = query.getResultList();
+        Number total = (Number) countQuery.getSingleResult();
+        return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
+    }
+
+    // ── RECOMMENDED 정렬 전용 쿼리 ─────────────────────────────────────────────────
+
+    /**
+     * 추천순(RECOMMENDED) 정렬 — 새 테이블 없이 기존 recommendation_cache(CF), product_vectors_by_diet(CONTENT) 재사용.
+     * 우선순위: CF 캐시 있으면 CF 점수 → 없고 diet_purpose 벡터 매칭 있으면 벡터 유사도 → 둘 다 없으면 인기순.
+     * 호출부에서 userId != null일 때만 이 메서드를 호출하도록 보장함.
+     */
+    @SuppressWarnings("unchecked")
+    private Page<Product> findAllOrderByPreference(ProductSearchRequest request, Long userId,
+                                                   List<Long> claimFilteredIds) {
+        int page = request.getPage();
+        int size = request.getSize();
+
+        StringBuilder where = new StringBuilder("WHERE p.is_active = TRUE ");
+        java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
+
+        if (claimFilteredIds != null) {
+            if (claimFilteredIds.isEmpty()) {
+                return new org.springframework.data.domain.PageImpl<>(
+                        List.of(), PageRequest.of(page, size), 0);
+            }
+            String idList = claimFilteredIds.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(","));
+            where.append("AND p.id IN (").append(idList).append(") ");
+        }
+
+        if (request.getKeyword() != null && !request.getKeyword().isBlank()) {
+            where.append("AND p.name ILIKE :keyword ");
+            params.put("keyword", "%" + request.getKeyword() + "%");
+        }
+        if (request.getMinCalories() != null) {
+            where.append("AND pn.calories >= :minCalories ");
+            params.put("minCalories", request.getMinCalories());
+        }
+        if (request.getMaxCalories() != null) {
+            where.append("AND pn.calories <= :maxCalories ");
+            params.put("maxCalories", request.getMaxCalories());
+        }
+        if (request.getMinProtein() != null) {
+            where.append("AND pn.protein >= :minProtein ");
+            params.put("minProtein", request.getMinProtein());
+        }
+        if (request.getMaxProtein() != null) {
+            where.append("AND pn.protein <= :maxProtein ");
+            params.put("maxProtein", request.getMaxProtein());
+        }
+        if (request.getMinFat() != null) {
+            where.append("AND pn.fat >= :minFat ");
+            params.put("minFat", request.getMinFat());
+        }
+        if (request.getMaxFat() != null) {
+            where.append("AND pn.fat <= :maxFat ");
+            params.put("maxFat", request.getMaxFat());
+        }
+        if (request.getMinCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate >= :minCarbohydrate ");
+            params.put("minCarbohydrate", request.getMinCarbohydrate());
+        }
+        if (request.getMaxCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate <= :maxCarbohydrate ");
+            params.put("maxCarbohydrate", request.getMaxCarbohydrate());
+        }
+        if (request.getMinSugar() != null) {
+            where.append("AND pn.sugar >= :minSugar ");
+            params.put("minSugar", request.getMinSugar());
+        }
+        if (request.getMaxSugar() != null) {
+            where.append("AND pn.sugar <= :maxSugar ");
+            params.put("maxSugar", request.getMaxSugar());
+        }
+        if (request.getMinSodium() != null) {
+            where.append("AND pn.sodium >= :minSodium ");
+            params.put("minSodium", request.getMinSodium());
+        }
+        if (request.getMaxSodium() != null) {
+            where.append("AND pn.sodium <= :maxSodium ");
+            params.put("maxSodium", request.getMaxSodium());
+        }
+        if (request.getMinNutritionScore() != null) {
+            where.append("AND p.nutrition_score >= :minNutritionScore ");
+            params.put("minNutritionScore", request.getMinNutritionScore());
+        }
+        if (request.getMaxNutritionScore() != null) {
+            where.append("AND p.nutrition_score <= :maxNutritionScore ");
+            params.put("maxNutritionScore", request.getMaxNutritionScore());
+        }
+
+        boolean needNutrientJoin = request.getMinCalories() != null || request.getMaxCalories() != null
+                || request.getMinProtein() != null || request.getMaxProtein() != null
+                || request.getMinFat() != null || request.getMaxFat() != null
+                || request.getMinCarbohydrate() != null || request.getMaxCarbohydrate() != null
+                || request.getMinSugar() != null || request.getMaxSugar() != null
+                || request.getMinSodium() != null || request.getMaxSodium() != null;
+
+        String nutrientJoin = needNutrientJoin
+                ? "JOIN product_nutrients pn ON p.id = pn.product_id "
+                : "";
+
+        // 1단계: CF 캐시 존재 여부 확인 (recommendation_cache)
+        boolean hasCfCache = !recommendationCacheRepository.findByUserIdOrderByScoreDesc(userId).isEmpty();
+
+        String preferenceJoin;
+        String orderBy;
+
+        if (hasCfCache) {
+            preferenceJoin = "LEFT JOIN recommendation_cache rc ON p.id = rc.product_id AND rc.user_id = :userId ";
+            orderBy = "ORDER BY rc.score DESC NULLS LAST, p.view_count DESC ";
+            params.put("userId", userId);
+        } else {
+            String dietPurpose = userNutritionRepository.findByUserId(userId)
+                    .map(UserNutrition::getDietPurpose)
+                    .orElse(null);
+
+            if (dietPurpose != null) {
+                // 2단계: 콘텐츠 기반 — diet_purpose 영양소 벡터 유사도 (product_vectors_by_diet)
+                String targetVector = recommendationService.resolveTargetVector(dietPurpose);
+                preferenceJoin = "LEFT JOIN product_vectors_by_diet pvbd "
+                        + "ON p.id = pvbd.product_id AND pvbd.diet_purpose = :dietPurpose ";
+                orderBy = "ORDER BY (pvbd.weighted_vector <=> CAST(:targetVector AS vector)) ASC NULLS LAST, "
+                        + "p.view_count DESC ";
+                params.put("dietPurpose", dietPurpose);
+                params.put("targetVector", targetVector);
+            } else {
+                // 3단계: CF도 콘텐츠 벡터 신호도 없음 → 인기순 폴백
+                preferenceJoin = "";
+                orderBy = "ORDER BY p.view_count DESC ";
+            }
+        }
+
+        String sql = "SELECT p.* FROM products p " + preferenceJoin + nutrientJoin + where + orderBy
+                + "LIMIT :limit OFFSET :offset";
+        String countSql = "SELECT COUNT(*) FROM products p " + preferenceJoin + nutrientJoin + where;
+
+        params.put("limit", size);
+        params.put("offset", (long) page * size);
+
+        var query = entityManager.createNativeQuery(sql, Product.class);
+        var countQuery = entityManager.createNativeQuery(countSql);
+        params.forEach((k, v) -> {
+            if (!k.equals("limit") && !k.equals("offset")) {
+                countQuery.setParameter(k, v);
+            }
+            query.setParameter(k, v);
+        });
+
+        List<Product> content = query.getResultList();
+        Number total = (Number) countQuery.getSingleResult();
+        return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
+    }
+
     // ── 헬퍼 ─────────────────────────────────────────────────────────────────────
 
     private Specification<Product> andIf(Specification<Product> spec, boolean condition, Specification<Product> other) {
@@ -501,8 +796,8 @@ public class ProductService {
         return switch (sort) {
             case "POPULAR"     -> Sort.by(Sort.Direction.DESC, "viewCount");
             case "SCORE"       -> Sort.by(Sort.Direction.DESC, "nutritionScore");
-            case "ACCURACY",
-                 "RECOMMENDED" -> Sort.by(Sort.Direction.DESC, "createdAt");
+            case "ACCURACY"    -> Sort.by(Sort.Direction.DESC, "createdAt");
+            case "RECOMMENDED" -> Sort.by(Sort.Direction.DESC, "viewCount");
             default            -> Sort.by(Sort.Direction.DESC, "createdAt");
         };
     }

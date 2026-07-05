@@ -57,7 +57,7 @@ public class RecommendationService {
         Optional<UserNutrition> nutrition = userNutritionRepository.findByUserId(userId);
         if (nutrition.isPresent()) {
             String dietPurpose = nutrition.get().getDietPurpose();
-            String targetVector = TARGET_VECTORS.getOrDefault(dietPurpose, TARGET_VECTORS.get("OTHER"));
+            String targetVector = resolveTargetVector(dietPurpose);
             List<Long> productIds = productVectorByDietRepository
                     .findTopProductIdsByDietPurpose(dietPurpose, targetVector, DEFAULT_LIMIT);
             if (!productIds.isEmpty()) {
@@ -67,6 +67,14 @@ public class RecommendationService {
 
         // 3단계: 인기순 폴백
         return buildPopularResponse(userId, eerBand, goal);
+    }
+
+    /**
+     * diet_purpose에 해당하는 타겟 벡터 문자열 반환.
+     * ProductService의 RECOMMENDED 정렬(findAllOrderByPreference)에서도 재사용됨 — 로직 중복 방지용 public 메서드.
+     */
+    public String resolveTargetVector(String dietPurpose) {
+        return TARGET_VECTORS.getOrDefault(dietPurpose, TARGET_VECTORS.get("OTHER"));
     }
 
     // ── CF 응답 ───────────────────────────────────────────────────────────────────
