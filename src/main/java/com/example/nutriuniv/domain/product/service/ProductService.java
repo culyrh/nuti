@@ -94,20 +94,30 @@ public class ProductService {
         int eerBand = pnsLookupService.resolveEerBand(userId);
         String goal = pnsLookupService.resolveGoal(userId);
 
-        // SCORE 정렬은 pns score 기준 네이티브 쿼리, 나머지는 JPA 정렬
+        // SCORE/ACCURACY(키워드 있을 때) 정렬은 네이티브 쿼리, 나머지는 JPA 정렬
+        boolean hasKeyword = request.getKeyword() != null && !request.getKeyword().isBlank();
+        boolean hasFilter = (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty())
+                || (request.getBrandIds() != null && !request.getBrandIds().isEmpty())
+                || !claims.isEmpty();
+
         Page<Product> page;
         if ("SCORE".equals(request.getSort())) {
             // 카테고리/브랜드/nutrientClaims 필터가 있으면 JPA spec으로 ID 목록 추출
             // (카테고리는 하위 카테고리까지 포함하는 서브쿼리 로직이 있어서 JPA spec으로 처리해야 함)
             List<Long> claimFilteredIds = null;
-            boolean hasFilter = (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty())
-                    || (request.getBrandIds() != null && !request.getBrandIds().isEmpty())
-                    || !claims.isEmpty();
             if (hasFilter) {
                 claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
                         .stream().map(Product::getId).collect(Collectors.toList());
             }
             page = findAllOrderByPnsScore(request, eerBand, goal, userId != null, claimFilteredIds);
+        } else if ("ACCURACY".equals(request.getSort()) && hasKeyword) {
+            // 정확도순: 키워드가 있을 때만 트라이그램 유사도 정렬. 키워드 없으면 아래 else로 폴백(최신순).
+            List<Long> claimFilteredIds = null;
+            if (hasFilter) {
+                claimFilteredIds = productRepository.findAll(spec, PageRequest.of(0, Integer.MAX_VALUE))
+                        .stream().map(Product::getId).collect(Collectors.toList());
+            }
+            page = findAllOrderByRelevance(request, claimFilteredIds);
         } else {
             Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), resolveSort(request.getSort()));
             page = productRepository.findAll(spec, pageable);
@@ -442,6 +452,128 @@ public class ProductService {
         String sql = "SELECT p.* FROM products p " + pnsJoin + nutrientJoin + where + orderBy
                 + "LIMIT :limit OFFSET :offset";
         String countSql = "SELECT COUNT(*) FROM products p " + pnsJoin + nutrientJoin + where;
+
+        params.put("limit", size);
+        params.put("offset", (long) page * size);
+
+        var query = entityManager.createNativeQuery(sql, Product.class);
+        var countQuery = entityManager.createNativeQuery(countSql);
+        params.forEach((k, v) -> {
+            if (!k.equals("limit") && !k.equals("offset")) {
+                countQuery.setParameter(k, v);
+            }
+            query.setParameter(k, v);
+        });
+
+        List<Product> content = query.getResultList();
+        Number total = (Number) countQuery.getSingleResult();
+        return new org.springframework.data.domain.PageImpl<>(content, PageRequest.of(page, size), total.longValue());
+    }
+
+    // ── ACCURACY 정렬 전용 쿼리 ────────────────────────────────────────────────────
+
+    /**
+     * 정확도순(ACCURACY) 정렬 — PostgreSQL pg_trgm 기반 상품명 트라이그램 유사도로 정렬.
+     * 호출부에서 키워드가 있을 때만 이 메서드를 호출하도록 보장함.
+     * 사전 작업 필요: DB에 아래 SQL 1회 실행
+     *   CREATE EXTENSION IF NOT EXISTS pg_trgm;
+     *   CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON products USING gin (name gin_trgm_ops);
+     */
+    @SuppressWarnings("unchecked")
+    private Page<Product> findAllOrderByRelevance(ProductSearchRequest request,
+                                                  List<Long> claimFilteredIds) {
+        int page = request.getPage();
+        int size = request.getSize();
+
+        StringBuilder where = new StringBuilder("WHERE p.is_active = TRUE ");
+        java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
+
+        if (claimFilteredIds != null) {
+            if (claimFilteredIds.isEmpty()) {
+                return new org.springframework.data.domain.PageImpl<>(
+                        List.of(), PageRequest.of(page, size), 0);
+            }
+            String idList = claimFilteredIds.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(","));
+            where.append("AND p.id IN (").append(idList).append(") ");
+        }
+
+        params.put("keyword", request.getKeyword());
+
+        if (request.getMinCalories() != null) {
+            where.append("AND pn.calories >= :minCalories ");
+            params.put("minCalories", request.getMinCalories());
+        }
+        if (request.getMaxCalories() != null) {
+            where.append("AND pn.calories <= :maxCalories ");
+            params.put("maxCalories", request.getMaxCalories());
+        }
+        if (request.getMinProtein() != null) {
+            where.append("AND pn.protein >= :minProtein ");
+            params.put("minProtein", request.getMinProtein());
+        }
+        if (request.getMaxProtein() != null) {
+            where.append("AND pn.protein <= :maxProtein ");
+            params.put("maxProtein", request.getMaxProtein());
+        }
+        if (request.getMinFat() != null) {
+            where.append("AND pn.fat >= :minFat ");
+            params.put("minFat", request.getMinFat());
+        }
+        if (request.getMaxFat() != null) {
+            where.append("AND pn.fat <= :maxFat ");
+            params.put("maxFat", request.getMaxFat());
+        }
+        if (request.getMinCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate >= :minCarbohydrate ");
+            params.put("minCarbohydrate", request.getMinCarbohydrate());
+        }
+        if (request.getMaxCarbohydrate() != null) {
+            where.append("AND pn.carbohydrate <= :maxCarbohydrate ");
+            params.put("maxCarbohydrate", request.getMaxCarbohydrate());
+        }
+        if (request.getMinSugar() != null) {
+            where.append("AND pn.sugar >= :minSugar ");
+            params.put("minSugar", request.getMinSugar());
+        }
+        if (request.getMaxSugar() != null) {
+            where.append("AND pn.sugar <= :maxSugar ");
+            params.put("maxSugar", request.getMaxSugar());
+        }
+        if (request.getMinSodium() != null) {
+            where.append("AND pn.sodium >= :minSodium ");
+            params.put("minSodium", request.getMinSodium());
+        }
+        if (request.getMaxSodium() != null) {
+            where.append("AND pn.sodium <= :maxSodium ");
+            params.put("maxSodium", request.getMaxSodium());
+        }
+        if (request.getMinNutritionScore() != null) {
+            where.append("AND p.nutrition_score >= :minNutritionScore ");
+            params.put("minNutritionScore", request.getMinNutritionScore());
+        }
+        if (request.getMaxNutritionScore() != null) {
+            where.append("AND p.nutrition_score <= :maxNutritionScore ");
+            params.put("maxNutritionScore", request.getMaxNutritionScore());
+        }
+
+        boolean needNutrientJoin = request.getMinCalories() != null || request.getMaxCalories() != null
+                || request.getMinProtein() != null || request.getMaxProtein() != null
+                || request.getMinFat() != null || request.getMaxFat() != null
+                || request.getMinCarbohydrate() != null || request.getMaxCarbohydrate() != null
+                || request.getMinSugar() != null || request.getMaxSugar() != null
+                || request.getMinSodium() != null || request.getMaxSodium() != null;
+
+        String nutrientJoin = needNutrientJoin
+                ? "JOIN product_nutrients pn ON p.id = pn.product_id "
+                : "";
+
+        // similarity(name, keyword): pg_trgm 트라이그램 유사도(0~1), 높을수록 관련도 높음
+        String sql = "SELECT p.* FROM products p " + nutrientJoin + where
+                + "ORDER BY similarity(p.name, :keyword) DESC, p.created_at DESC "
+                + "LIMIT :limit OFFSET :offset";
+        String countSql = "SELECT COUNT(*) FROM products p " + nutrientJoin + where;
 
         params.put("limit", size);
         params.put("offset", (long) page * size);
