@@ -15,6 +15,7 @@ public class UserResponse {
     private String nickname;
     private String gender;
     private LocalDate birthDate;
+    private String role;   // USER / ADMIN — 프론트 관리자 페이지 분기용
 
     public static UserResponse from(User user) {
         return UserResponse.builder()
@@ -24,6 +25,7 @@ public class UserResponse {
                 .nickname(user.getNickname())
                 .gender(user.getGender())
                 .birthDate(user.getBirthDate())
+                .role(user.getRole())
                 .build();
     }
 }
