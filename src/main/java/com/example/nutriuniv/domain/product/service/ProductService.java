@@ -593,7 +593,9 @@ public class ProductService {
         var query = entityManager.createNativeQuery(sql, Product.class);
         var countQuery = entityManager.createNativeQuery(countSql);
         params.forEach((k, v) -> {
-            if (!k.equals("limit") && !k.equals("offset")) {
+            // keyword는 countSql에 존재하지 않는 파라미터(ORDER BY의 similarity()에서만 사용)이므로
+            // countQuery에 바인딩하면 "No parameter named ':keyword'" 예외가 발생함. 반드시 제외.
+            if (!k.equals("limit") && !k.equals("offset") && !k.equals("keyword")) {
                 countQuery.setParameter(k, v);
             }
             query.setParameter(k, v);
