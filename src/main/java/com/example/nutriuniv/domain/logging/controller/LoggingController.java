@@ -4,6 +4,7 @@ import com.example.nutriuniv.common.response.CommonResponse;
 import com.example.nutriuniv.common.security.UserPrincipal;
 import com.example.nutriuniv.domain.logging.dto.CtaLogRequest;
 import com.example.nutriuniv.domain.logging.dto.FilterLogRequest;
+import com.example.nutriuniv.domain.logging.dto.ImpressionLogRequest;
 import com.example.nutriuniv.domain.logging.dto.LogContext;
 import com.example.nutriuniv.domain.logging.dto.SearchLogRequest;
 import com.example.nutriuniv.domain.logging.dto.ViewLogRequest;
@@ -87,6 +88,22 @@ public class LoggingController {
             HttpServletRequest httpServletRequest) {
 
         loggingService.logFilter(request, resolveContext(principal, httpServletRequest));
+        return ResponseEntity.ok(CommonResponse.success(null));
+    }
+
+    // POST /logging/impression
+    @Operation(summary = "상품 노출 로그 기록 (impression)",
+            description = "목록/추천/검색 결과에 상품이 보여졌을 때 클라이언트가 호출합니다. " +
+                    "한 화면에 보인 상품들을 items 배열로 배치 전송합니다(surface: LIST/RECOMMENDATION/SEARCH). " +
+                    "추천 모델의 음성 샘플로 사용됩니다. 유효 방문에는 포함되지 않으며, " +
+                    "세션 내 동일 상품 중복은 무시됩니다. 로그 저장 실패 시에도 200을 반환합니다.")
+    @PostMapping("/logging/impression")
+    public ResponseEntity<CommonResponse<Void>> logImpression(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody ImpressionLogRequest request,
+            HttpServletRequest httpServletRequest) {
+
+        loggingService.logImpressions(request, resolveContext(principal, httpServletRequest));
         return ResponseEntity.ok(CommonResponse.success(null));
     }
 

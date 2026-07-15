@@ -4,6 +4,7 @@ import com.example.nutriuniv.common.exception.CustomException;
 import com.example.nutriuniv.common.exception.ErrorCode;
 import com.example.nutriuniv.domain.logging.dto.CtaLogRequest;
 import com.example.nutriuniv.domain.logging.dto.FilterLogRequest;
+import com.example.nutriuniv.domain.logging.dto.ImpressionLogRequest;
 import com.example.nutriuniv.domain.logging.dto.LogContext;
 import com.example.nutriuniv.domain.logging.dto.SearchLogRequest;
 import com.example.nutriuniv.domain.logging.dto.ViewLogRequest;
@@ -17,12 +18,17 @@ import com.example.nutriuniv.domain.logging.repository.ProductViewLogRepository;
 import com.example.nutriuniv.domain.logging.repository.SearchLogRepository;
 import com.example.nutriuniv.domain.product.entity.Product;
 import com.example.nutriuniv.domain.product.repository.ProductRepository;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -37,6 +43,7 @@ public class LoggingService {
     private final ProductFilterLogRepository productFilterLogRepository;
     private final ProductRepository productRepository;
     private final VisitTrackingService visitTrackingService;
+    private final EntityManager em;
 
     // ── POST /logging/view (product_detail_viewed, 유효 방문) ──────────────────────
 
@@ -131,6 +138,65 @@ public class LoggingService {
         } catch (Exception e) {
             log.error("[FilterLog] 로그 저장 실패 - filterType: {}, error: {}",
                     request.getFilterType(), e.getMessage());
+        }
+    }
+
+    // ── POST /logging/impression (상품 노출, 음성 샘플용) ──────────────────────────
+
+    /**
+     * 한 화면에 보인 상품들을 벌크 insert. 세션 내 (product_id, surface) 중복은
+     * 유니크 제약으로 무시(ON CONFLICT DO NOTHING). 노출은 유효 방문이 아니므로
+     * 세션 추적(visitTrackingService)은 호출하지 않는다.
+     */
+    @Transactional
+    public void logImpressions(ImpressionLogRequest request, LogContext ctx) {
+        if (request.getSurface() == null || request.getSurface().isBlank()) {
+            throw new CustomException(ErrorCode.BAD_REQUEST, "surface는 필수입니다.");
+        }
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            return;
+        }
+
+        try {
+            // 요청 내 동일 productId 제거 (첫 등장 순서 유지)
+            Map<Long, ImpressionLogRequest.Item> unique = new LinkedHashMap<>();
+            for (ImpressionLogRequest.Item it : request.getItems()) {
+                if (it.getProductId() != null) {
+                    unique.putIfAbsent(it.getProductId(), it);
+                }
+            }
+            if (unique.isEmpty()) {
+                return;
+            }
+
+            StringBuilder sql = new StringBuilder("""
+                    INSERT INTO product_impression_logs
+                      (user_id, anonymous_id, session_id, cohort, product_id, surface, position, keyword, created_at)
+                    VALUES """);
+            List<Object> params = new ArrayList<>();
+            int idx = 0;
+            for (ImpressionLogRequest.Item it : unique.values()) {
+                if (idx++ > 0) sql.append(",");
+                sql.append("(?,?,?,?,?,?,?,?, now())");
+                params.add(ctx.userId());
+                params.add(ctx.anonymousId());
+                params.add(ctx.sessionId());
+                params.add(ctx.cohort());
+                params.add(it.getProductId());
+                params.add(request.getSurface());
+                params.add(it.getPosition());
+                params.add(request.getKeyword());
+            }
+            sql.append(" ON CONFLICT (session_id, product_id, surface) DO NOTHING");
+
+            var query = em.createNativeQuery(sql.toString());
+            for (int p = 0; p < params.size(); p++) {
+                query.setParameter(p + 1, params.get(p));
+            }
+            query.executeUpdate();
+        } catch (Exception e) {
+            log.error("[ImpressionLog] 로그 저장 실패 - surface: {}, error: {}",
+                    request.getSurface(), e.getMessage());
         }
     }
 }
