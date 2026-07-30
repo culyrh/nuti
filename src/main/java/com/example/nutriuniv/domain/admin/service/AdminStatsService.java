@@ -88,9 +88,9 @@ public class AdminStatsService {
 
         return productViewLogRepository.findDailyStats(start, end).stream()
                 .map(row -> AdminViewStatResponse.builder()
-                        .date(((java.sql.Date) row[0]).toLocalDate())
-                        .viewCount(((Number) row[1]).longValue())
-                        .uniqueProductCount(((Number) row[2]).longValue())
+                        .date(row.date())
+                        .viewCount(row.viewCount())
+                        .uniqueProductCount(row.uniqueProductCount())
                         .build())
                 .collect(Collectors.toList());
     }
@@ -105,9 +105,9 @@ public class AdminStatsService {
 
         return searchLogRepository.findDailyStats(start, end).stream()
                 .map(row -> AdminSearchStatResponse.builder()
-                        .date(((java.sql.Date) row[0]).toLocalDate())
-                        .searchCount(((Number) row[1]).longValue())
-                        .uniqueKeywordCount(((Number) row[2]).longValue())
+                        .date(row.date())
+                        .searchCount(row.searchCount())
+                        .uniqueKeywordCount(row.uniqueKeywordCount())
                         .build())
                 .collect(Collectors.toList());
     }
