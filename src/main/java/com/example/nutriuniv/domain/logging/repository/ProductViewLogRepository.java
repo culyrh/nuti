@@ -1,5 +1,6 @@
 package com.example.nutriuniv.domain.logging.repository;
 
+import com.example.nutriuniv.domain.logging.dto.DailyViewStat;
 import com.example.nutriuniv.domain.logging.entity.ProductViewLog;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -11,15 +12,17 @@ import java.util.List;
 public interface ProductViewLogRepository extends JpaRepository<ProductViewLog, Long> {
 
     // 관리자 조회 통계 (일별 조회수 / 고유 상품 수)
-    @Query(value = """
-            SELECT DATE(created_at)        AS date,
-                   COUNT(*)               AS view_count,
-                   COUNT(DISTINCT product_id) AS unique_product_count
-            FROM product_view_logs
-            WHERE created_at >= :start AND created_at < :end
-            GROUP BY DATE(created_at)
-            ORDER BY DATE(created_at)
-            """, nativeQuery = true)
-    List<Object[]> findDailyStats(@Param("start") LocalDateTime start,
-                                  @Param("end") LocalDateTime end);
+    // native query + Object[] 대신 JPQL 생성자 표현식을 사용한다.
+    @Query("""
+            SELECT new com.example.nutriuniv.domain.logging.dto.DailyViewStat(
+                       CAST(v.createdAt AS LocalDate),
+                       COUNT(v),
+                       COUNT(DISTINCT v.product.id))
+            FROM ProductViewLog v
+            WHERE v.createdAt >= :start AND v.createdAt < :end
+            GROUP BY CAST(v.createdAt AS LocalDate)
+            ORDER BY CAST(v.createdAt AS LocalDate)
+            """)
+    List<DailyViewStat> findDailyStats(@Param("start") LocalDateTime start,
+                                       @Param("end") LocalDateTime end);
 }
